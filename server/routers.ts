@@ -5,6 +5,8 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
+import { sdk } from "./_core/sdk";
+import { ENV } from "./_core/env";
 import {
   diningTables,
   dishes,
@@ -14,6 +16,7 @@ import {
 import {
   findOrderByNumber,
   getDb,
+  getUserByOpenId,
   getPublicMenuByTable,
   getRestaurantByOwner,
   getRestaurantState,
@@ -42,6 +45,24 @@ export const appRouter = router({
   system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
+    merchantLogin: publicProcedure
+      .input(z.object({ code: z.string().regex(/^\d{8}$/, "请输入 8 位数字登录码") }))
+      .mutation(async ({ ctx, input }) => {
+        if (input.code !== ENV.merchantLoginCode) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "登录码不正确" });
+        }
+        if (!ENV.ownerOpenId) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "商家账号尚未配置" });
+        }
+        const owner = await getUserByOpenId(ENV.ownerOpenId);
+        if (!owner || owner.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "商家管理员账号尚未初始化" });
+        }
+        const token = await sdk.createSessionToken(ENV.ownerOpenId, { name: owner.name ?? "门店管理员" });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: 1000 * 60 * 60 * 24 * 30 });
+        return { success: true } as const;
+      }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });

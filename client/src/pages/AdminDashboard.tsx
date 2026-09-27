@@ -1,6 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import type { AdminState as BackendAdminState } from "../../../server/db";
-import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { TABLE_CODE_PATTERN, validateTableInput } from "@shared/table-validation";
 import { Badge } from "@/components/ui/badge";
@@ -55,7 +54,18 @@ export default function AdminDashboard() {
 }
 
 function LoadingScreen({ label = "正在加载…" }: { label?: string }) { return <div className="grid min-h-screen place-items-center bg-[#f7f6f1] text-[#68736d]"><div className="text-center"><div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-4 border-[#ead5c8] border-t-[#d66a4b]" /><p>{label}</p></div></div>; }
-function LoginScreen() { return <div className="grid min-h-screen place-items-center bg-[#1d2926] p-5"><div className="w-full max-w-md rounded-[2rem] bg-[#f7f6f1] p-8 text-center sm:p-10"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#d66a4b] text-white"><UtensilsCrossed className="h-7 w-7" /></div><div className="mono mt-7 text-[10px] uppercase tracking-[.25em] text-[#d66a4b]">MERCHANT CONSOLE</div><h1 className="mt-2 text-3xl font-extrabold tracking-tight">登录管理后台</h1><p className="mt-3 leading-6 text-[#738078]">只有门店管理员可以查看和处理订单。顾客无需登录即可通过桌台二维码点餐。</p><Button onClick={() => startLogin()} className="mt-7 h-12 w-full rounded-xl bg-[#1d2926] text-white hover:bg-[#304640]">安全登录</Button><Link href="/"><Button variant="ghost" className="mt-2 text-[#748078]">返回首页</Button></Link></div></div>; }
+function LoginScreen() {
+  const utils = trpc.useUtils();
+  const [code, setCode] = useState("");
+  const login = trpc.auth.merchantLogin.useMutation({
+    onSuccess: async () => {
+      await utils.auth.me.invalidate();
+      toast.success("登录成功");
+    },
+    onError: error => toast.error(error.message),
+  });
+  return <div className="grid min-h-screen place-items-center bg-[#1d2926] p-5"><div className="w-full max-w-md rounded-[2rem] bg-[#f7f6f1] p-8 text-center sm:p-10"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#d66a4b] text-white"><UtensilsCrossed className="h-7 w-7" /></div><div className="mono mt-7 text-[10px] uppercase tracking-[.25em] text-[#d66a4b]">MERCHANT CONSOLE</div><h1 className="mt-2 text-3xl font-extrabold tracking-tight">登录管理后台</h1><p className="mt-3 leading-6 text-[#738078]">请输入门店管理员数字登录码。顾客无需登录即可通过桌台二维码点餐。</p><form onSubmit={event => { event.preventDefault(); if (code.length !== 8) { toast.error("请输入 8 位数字登录码"); return; } login.mutate({ code }); }} className="mt-7"><Input type="password" inputMode="numeric" autoComplete="one-time-code" maxLength={8} pattern="[0-9]{8}" value={code} onChange={event => setCode(event.target.value.replace(/\\D/g, "").slice(0, 8))} placeholder="请输入 8 位数字登录码" className="h-12 bg-white text-center text-xl tracking-[.35em]" aria-label="商家数字登录码" /><Button type="submit" disabled={login.isPending || code.length !== 8} className="mt-4 h-12 w-full rounded-xl bg-[#1d2926] text-white hover:bg-[#304640]">{login.isPending ? "验证中…" : "进入管理后台"}</Button></form><Link href="/"><Button variant="ghost" className="mt-2 text-[#748078]">返回首页</Button></Link></div></div>;
+}
 function ForbiddenScreen({ onLogout }: { onLogout: () => void }) { return <div className="grid min-h-screen place-items-center bg-[#f7f6f1] p-6 text-center"><div><ShieldIcon /><h1 className="mt-5 text-2xl font-bold">当前账号没有管理权限</h1><p className="mt-2 text-[#738078]">请使用门店管理员账号登录，或联系系统所有者开通权限。</p><Button onClick={onLogout} variant="outline" className="mt-6">退出当前账号</Button></div></div>; }
 function ShieldIcon() { return <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[#fbe8dc] text-[#b95439]"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 4.5 6v5.5c0 4.7 3.2 8 7.5 9.5 4.3-1.5 7.5-4.8 7.5-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg></div>; }
 function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) { return <div className="mx-auto max-w-xl rounded-3xl border border-[#f0c9c3] bg-[#fff8f6] p-8 text-center"><h1 className="text-xl font-bold text-[#8c3e35]">暂时无法读取门店数据</h1><p className="mt-3 text-sm leading-6 text-[#9c655d]">{message}</p><Button onClick={onRetry} className="mt-6 bg-[#d66a4b] text-white hover:bg-[#bf573b]">重新连接</Button></div>; }
