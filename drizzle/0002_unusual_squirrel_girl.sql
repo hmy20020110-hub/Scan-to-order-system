@@ -1,0 +1,1 @@
+ALTER TABLE `orders` ADD `paymentMethod` enum('on_site','wechat') DEFAULT 'on_site' NOT NULL;

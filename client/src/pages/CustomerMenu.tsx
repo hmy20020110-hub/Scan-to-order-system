@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, ChevronRight, Minus, Plus, ReceiptText, ShoppingBag, UtensilsCrossed, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, ChevronRight, CreditCard, Minus, Plus, ReceiptText, ShoppingBag, UtensilsCrossed, WalletCards, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -16,7 +16,7 @@ export default function CustomerMenu() {
   const [cart, setCart] = useState<Record<number, number>>({});
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [customerNote, setCustomerNote] = useState("");
-  const [confirmation, setConfirmation] = useState<{ orderNumber: string; totalCents: number } | null>(null);
+  const [paymentOrder, setPaymentOrder] = useState<{ orderNumber: string; totalCents: number; tableName: string; paymentMethod: "on_site" | "wechat"; paymentStatus: "unpaid" | "pending" | "paid" | "refunded" } | null>(null);
 
   const menuQuery = trpc.public.menu.useQuery(
     { tableCode },
@@ -24,11 +24,11 @@ export default function CustomerMenu() {
   );
   const createOrder = trpc.public.order.create.useMutation({
     onSuccess: result => {
-      setConfirmation(result);
+      setPaymentOrder(result);
       setCart({});
       setCustomerNote("");
       setCheckoutOpen(false);
-      toast.success("订单已提交，店员会按桌台处理");
+      toast.success("订单已提交，进入支付页面");
     },
     onError: error => toast.error(error.message),
   });
@@ -70,8 +70,8 @@ export default function CustomerMenu() {
     return <InvalidTable detail={menuQuery.error?.message} />;
   }
 
-  if (confirmation) {
-    return <OrderConfirmation restaurantName={menu.restaurant.name} tableName={menu.table.name} order={confirmation} onBack={() => setConfirmation(null)} />;
+  if (paymentOrder) {
+    return <PaymentPage restaurantName={menu.restaurant.name} tableName={menu.table.name} order={paymentOrder} onBack={() => setPaymentOrder(null)} />;
   }
 
   return (
@@ -96,7 +96,7 @@ export default function CustomerMenu() {
 
       {itemCount > 0 && <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[#dedfd7] bg-[#f7f6f1]/95 p-3 shadow-[0_-12px_32px_rgba(29,41,38,.08)] backdrop-blur"><div className="container"><Button onClick={() => setCheckoutOpen(true)} className="pressable h-14 w-full justify-between rounded-2xl bg-[#d66a4b] px-5 text-white shadow-lg shadow-[#d66a4b]/20 hover:bg-[#bf573b]"><span className="flex items-center gap-3"><span className="grid h-8 w-8 place-items-center rounded-xl bg-white/15"><ShoppingBag className="h-4 w-4" /></span><span>{itemCount} 件菜品 · 提交订单</span></span><span className="flex items-center gap-1 font-bold">{money(totalCents)}<ChevronRight className="h-5 w-5" /></span></Button></div></div>}
 
-      {checkoutOpen && <CheckoutDialog cartItems={cartItems} totalCents={totalCents} customerNote={customerNote} setCustomerNote={setCustomerNote} pending={createOrder.isPending} onClose={() => setCheckoutOpen(false)} onSubmit={() => createOrder.mutate({ tableCode, customerNote, items: cartItems.map(item => ({ dishId: item.dish.id, quantity: item.quantity })) })} />}
+      {checkoutOpen && <CheckoutDialog cartItems={cartItems} totalCents={totalCents} customerNote={customerNote} setCustomerNote={setCustomerNote} pending={createOrder.isPending} onClose={() => setCheckoutOpen(false)} onSubmit={paymentMethod => createOrder.mutate({ tableCode, customerNote, paymentMethod, items: cartItems.map(item => ({ dishId: item.dish.id, quantity: item.quantity })) })} />}
     </div>
   );
 }
@@ -107,10 +107,12 @@ function InvalidTable({ detail }: { detail?: string }) {
 
 function QrCodeIcon() { return <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM19 19h2v2h-2zM19 14h2M14 19h2" /></svg>; }
 
-function CheckoutDialog({ cartItems, totalCents, customerNote, setCustomerNote, pending, onClose, onSubmit }: { cartItems: Array<{ dish: { id: number; name: string; priceCents: number }; quantity: number }>; totalCents: number; customerNote: string; setCustomerNote: (value: string) => void; pending: boolean; onClose: () => void; onSubmit: () => void }) {
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#1d2926]/45 p-0 sm:items-center sm:p-5"><div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-[#fffefa] p-5 shadow-2xl sm:rounded-3xl sm:p-7"><div className="flex items-center justify-between"><div><div className="mono text-[10px] uppercase tracking-[.22em] text-[#d66a4b]">CHECKOUT</div><h2 className="mt-1 text-2xl font-bold">确认订单</h2></div><button onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full bg-[#f0f1eb] text-[#68736d] hover:bg-[#e5e7de]" aria-label="关闭"><X className="h-5 w-5" /></button></div><div className="mt-6 divide-y divide-[#ecece5] rounded-2xl border border-[#e5e5dd] bg-white">{cartItems.map(item => <div key={item.dish.id} className="flex items-center justify-between px-4 py-3"><div><div className="font-semibold">{item.dish.name}</div><div className="text-xs text-[#7a857e]">{money(item.dish.priceCents)} × {item.quantity}</div></div><div className="font-semibold text-[#b95439]">{money(item.dish.priceCents * item.quantity)}</div></div>)}</div><label className="mt-6 block text-sm font-semibold">备注 <span className="font-normal text-[#9ca59e]">（可选）</span><Textarea value={customerNote} onChange={event => setCustomerNote(event.target.value)} placeholder="例如：少辣、不要香菜" className="mt-2 min-h-20 resize-none bg-white" maxLength={500} /></label><div className="mt-6 flex items-center justify-between border-t border-[#e5e5dd] pt-5"><span className="text-sm text-[#718078]">到店支付 · 当前未接入线上支付</span><span className="text-xl font-extrabold text-[#b95439]">{money(totalCents)}</span></div><Button onClick={onSubmit} disabled={pending} className="mt-5 h-12 w-full rounded-xl bg-[#d66a4b] font-bold text-white hover:bg-[#bf573b]">{pending ? "提交中…" : "确认提交订单"}</Button></div></div>;
+function CheckoutDialog({ cartItems, totalCents, customerNote, setCustomerNote, pending, onClose, onSubmit }: { cartItems: Array<{ dish: { id: number; name: string; priceCents: number }; quantity: number }>; totalCents: number; customerNote: string; setCustomerNote: (value: string) => void; pending: boolean; onClose: () => void; onSubmit: (paymentMethod: "on_site" | "wechat") => void }) {
+  const [paymentMethod, setPaymentMethod] = useState<"on_site" | "wechat">("on_site");
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#1d2926]/45 p-0 sm:items-center sm:p-5"><div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-[#fffefa] p-5 shadow-2xl sm:rounded-3xl sm:p-7"><div className="flex items-center justify-between"><div><div className="mono text-[10px] uppercase tracking-[.22em] text-[#d66a4b]">STEP 02 / CONFIRM</div><h2 className="mt-1 text-2xl font-bold">确认订单</h2></div><button onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full bg-[#f0f1eb] text-[#68736d] hover:bg-[#e5e7de]" aria-label="关闭"><X className="h-5 w-5" /></button></div><div className="mt-6 divide-y divide-[#ecece5] rounded-2xl border border-[#e5e5dd] bg-white">{cartItems.map(item => <div key={item.dish.id} className="flex items-center justify-between px-4 py-3"><div><div className="font-semibold">{item.dish.name}</div><div className="text-xs text-[#7a857e]">{money(item.dish.priceCents)} × {item.quantity}</div></div><div className="font-semibold text-[#b95439]">{money(item.dish.priceCents * item.quantity)}</div></div>)}</div><label className="mt-6 block text-sm font-semibold">备注 <span className="font-normal text-[#9ca59e]">（可选）</span><Textarea value={customerNote} onChange={event => setCustomerNote(event.target.value)} placeholder="例如：少辣、不要香菜" className="mt-2 min-h-20 resize-none bg-white" maxLength={500} /></label><div className="mt-6"><div className="text-sm font-semibold">选择支付方式</div><div className="mt-3 grid gap-2"><button type="button" onClick={() => setPaymentMethod("on_site")} className={`flex items-center justify-between rounded-2xl border p-4 text-left transition-colors ${paymentMethod === "on_site" ? "border-[#d66a4b] bg-[#fff4ed]" : "border-[#e1e3db] bg-white hover:bg-[#faf8f2]"}`}><span className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#e5f0eb] text-[#39705d]"><WalletCards className="h-5 w-5" /></span><span><span className="block font-semibold">到店支付</span><span className="mt-1 block text-xs font-normal text-[#7d887f]">提交后商家立即收到订单，到店结账</span></span></span><span className={`h-4 w-4 rounded-full border-2 ${paymentMethod === "on_site" ? "border-[#d66a4b] bg-[#d66a4b] shadow-[inset_0_0_0_3px_#fff4ed]" : "border-[#c9d0c9]"}`} /></button><button type="button" disabled className="flex cursor-not-allowed items-center justify-between rounded-2xl border border-[#e1e3db] bg-[#f3f4ef] p-4 text-left opacity-70"><span className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#ece8f5] text-[#68508b]"><CreditCard className="h-5 w-5" /></span><span><span className="block font-semibold">微信支付</span><span className="mt-1 block text-xs font-normal text-[#8b968e]">待商家配置微信支付商户号</span></span></span><span className="rounded-full bg-[#e4e6df] px-2 py-1 text-[10px] font-semibold text-[#7d887f]">待配置</span></button></div></div><div className="mt-6 flex items-center justify-between border-t border-[#e5e5dd] pt-5"><span className="text-sm text-[#718078]">提交后进入支付界面</span><span className="text-xl font-extrabold text-[#b95439]">{money(totalCents)}</span></div><Button onClick={() => onSubmit(paymentMethod)} disabled={pending} className="mt-5 h-12 w-full rounded-xl bg-[#d66a4b] font-bold text-white hover:bg-[#bf573b]">{pending ? "提交中…" : "确认订单并进入支付"}</Button></div></div>;
 }
 
-function OrderConfirmation({ restaurantName, tableName, order, onBack }: { restaurantName: string; tableName: string; order: { orderNumber: string; totalCents: number }; onBack: () => void }) {
-  return <div className="grid min-h-screen place-items-center bg-[#f7f6f1] p-5"><div className="w-full max-w-md rounded-[2rem] border border-[#e1e3db] bg-[#fffefa] p-7 text-center shadow-xl shadow-[#1d2926]/5 sm:p-10"><div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-[#e2f0e8] text-[#4b806d]"><ReceiptText className="h-8 w-8" /></div><div className="mono mt-7 text-[10px] uppercase tracking-[.25em] text-[#8b968e]">ORDER RECEIVED</div><h1 className="mt-2 text-3xl font-extrabold tracking-tight">已收到你的订单</h1><p className="mt-3 leading-6 text-[#738078]">{restaurantName} · {tableName}<br />请留在本桌，店员会按订单处理。</p><div className="my-8 rounded-2xl bg-[#f2f4ed] px-5 py-4"><div className="text-xs text-[#7d887f]">订单号</div><div className="mono mt-1 text-2xl font-bold tracking-widest text-[#1d2926]">{order.orderNumber}</div><div className="mt-2 text-sm font-semibold text-[#b95439]">{money(order.totalCents)} · 到店支付</div></div><Button onClick={onBack} className="h-11 w-full rounded-xl bg-[#1d2926] text-white hover:bg-[#304640]">继续浏览菜单</Button></div></div>;
+function PaymentPage({ restaurantName, tableName, order, onBack }: { restaurantName: string; tableName: string; order: { orderNumber: string; totalCents: number; paymentMethod: "on_site" | "wechat"; paymentStatus: "unpaid" | "pending" | "paid" | "refunded" }; onBack: () => void }) {
+  const isWechat = order.paymentMethod === "wechat";
+  return <div className="grid min-h-screen place-items-center bg-[#f7f6f1] p-5"><div className="w-full max-w-md rounded-[2rem] border border-[#e1e3db] bg-[#fffefa] p-7 shadow-xl shadow-[#1d2926]/5 sm:p-10"><div className="flex items-center justify-center gap-2 text-[10px] font-semibold uppercase tracking-[.18em] text-[#9da79f]"><span className="rounded-full bg-[#e2f0e8] px-2.5 py-1 text-[#39705d]">01 选菜</span><ArrowRight className="h-3.5 w-3.5" /><span className="rounded-full bg-[#e2f0e8] px-2.5 py-1 text-[#39705d]">02 确认</span><ArrowRight className="h-3.5 w-3.5" /><span className="rounded-full bg-[#fbe8dc] px-2.5 py-1 text-[#a54e36]">03 支付</span></div><div className={`mx-auto mt-8 grid h-16 w-16 place-items-center rounded-full ${isWechat ? "bg-[#eee8f7] text-[#68508b]" : "bg-[#e2f0e8] text-[#39705d]"}`}>{isWechat ? <CreditCard className="h-8 w-8" /> : <WalletCards className="h-8 w-8" />}</div><div className="mono mt-7 text-center text-[10px] uppercase tracking-[.25em] text-[#8b968e]">PAYMENT</div><h1 className="mt-2 text-center text-3xl font-extrabold tracking-tight">{isWechat ? "微信支付" : "到店支付"}</h1><p className="mt-3 text-center leading-6 text-[#738078]">{isWechat ? "当前门店尚未完成微信支付配置，请联系商家。" : "订单已经送达商家后台，请向店员完成支付。"}<br />{restaurantName} · {tableName}</p><div className="my-8 rounded-2xl bg-[#f2f4ed] px-5 py-4"><div className="flex items-center justify-between text-xs text-[#7d887f]"><span>订单号</span><span>待支付</span></div><div className="mono mt-2 text-2xl font-bold tracking-widest text-[#1d2926]">{order.orderNumber}</div><div className="mt-2 text-sm font-semibold text-[#b95439]">待支付 {money(order.totalCents)}</div></div><div className="flex items-center gap-3 rounded-2xl border border-[#e1e3db] bg-white p-4 text-sm text-[#68736d]"><CheckCircle2 className="h-5 w-5 shrink-0 text-[#39705d]" /><span>商家后台已收到订单，当前支付状态：{order.paymentStatus === "paid" ? "已支付" : "未支付"}</span></div><Button onClick={onBack} className="mt-6 h-11 w-full rounded-xl bg-[#1d2926] text-white hover:bg-[#304640]">返回菜单</Button></div></div>;
 }

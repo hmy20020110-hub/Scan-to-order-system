@@ -18,6 +18,7 @@ import {
   getRestaurantByOwner,
   getRestaurantState,
   insertOrderWithItems,
+  updateOrderPaymentStatusByOwner,
   updateOrderStatusByOwner,
 } from "./db";
 import { TRPCError } from "@trpc/server";
@@ -70,6 +71,7 @@ export const appRouter = router({
                 }),
               )
               .min(1, "购物车不能为空"),
+            paymentMethod: z.enum(["on_site", "wechat"]).default("on_site"),
             customerNote: z.string().trim().max(500).optional().or(z.literal("")),
           }),
         )
@@ -87,11 +89,18 @@ export const appRouter = router({
             restaurantId: menu.restaurant.id,
             tableId: menu.table.id,
             orderNumber,
+            paymentMethod: input.paymentMethod,
             totalCents,
             customerNote: input.customerNote,
             items: normalizedItems,
           });
-          return { orderNumber, totalCents, tableName: menu.table.name };
+          return {
+            orderNumber,
+            totalCents,
+            tableName: menu.table.name,
+            paymentMethod: input.paymentMethod,
+            paymentStatus: "unpaid" as const,
+          };
         }),
       getByNumber: publicProcedure
         .input(z.object({ orderNumber: z.string().trim().min(1).max(32) }))
@@ -200,10 +209,17 @@ export const appRouter = router({
         const result = await db.insert(diningTables).values({ restaurantId: restaurant.id, name: input.name, code: input.code, status: "available" });
         return { id: Number(result[0].insertId) };
       }),
-    updateOrderStatus: adminOnly
+      updateOrderStatus: adminOnly
       .input(z.object({ orderId: z.number().int().positive(), status: z.enum(["pending", "confirmed", "preparing", "ready", "served", "cancelled"]) }))
       .mutation(async ({ ctx, input }) => {
         const updated = await updateOrderStatusByOwner(ctx.user.id, input.orderId, input.status);
+        if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "订单不存在" });
+        return { success: true } as const;
+      }),
+    updateOrderPaymentStatus: adminOnly
+      .input(z.object({ orderId: z.number().int().positive(), paymentStatus: z.enum(["unpaid", "pending", "paid", "refunded"]) }))
+      .mutation(async ({ ctx, input }) => {
+        const updated = await updateOrderPaymentStatusByOwner(ctx.user.id, input.orderId, input.paymentStatus);
         if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "订单不存在" });
         return { success: true } as const;
       }),

@@ -164,6 +164,7 @@ export async function insertOrderWithItems(params: {
   restaurantId: number;
   tableId: number;
   orderNumber: string;
+  paymentMethod: "on_site" | "wechat";
   totalCents: number;
   customerNote?: string;
   items: Array<{ dishId: number; dishName: string; unitPriceCents: number; quantity: number; note?: string }>;
@@ -175,6 +176,7 @@ export async function insertOrderWithItems(params: {
       restaurantId: params.restaurantId,
       tableId: params.tableId,
       orderNumber: params.orderNumber,
+      paymentMethod: params.paymentMethod,
       totalCents: params.totalCents,
       customerNote: params.customerNote || null,
       status: "pending",
@@ -221,6 +223,25 @@ export async function updateOrderStatusByOwner(ownerId: number, orderId: number,
   if (status === "served" || status === "cancelled") {
     await db.update(diningTables).set({ status: "available" }).where(eq(diningTables.id, target[0].tableId));
   }
+  return true;
+}
+
+export async function updateOrderPaymentStatusByOwner(
+  ownerId: number,
+  orderId: number,
+  paymentStatus: Order["paymentStatus"],
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  const restaurant = await getRestaurantByOwner(ownerId);
+  if (!restaurant) return false;
+  const target = await db
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, orderId), eq(orders.restaurantId, restaurant.id)))
+    .limit(1);
+  if (!target[0]) return false;
+  await db.update(orders).set({ paymentStatus }).where(eq(orders.id, orderId));
   return true;
 }
 

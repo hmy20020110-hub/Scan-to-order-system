@@ -81,6 +81,9 @@ export const orders = mysqlTable("orders", {
   ])
     .default("pending")
     .notNull(),
+  paymentMethod: mysqlEnum("paymentMethod", ["on_site", "wechat"])
+    .default("on_site")
+    .notNull(),
   paymentStatus: mysqlEnum("paymentStatus", ["unpaid", "pending", "paid", "refunded"])
     .default("unpaid")
     .notNull(),
