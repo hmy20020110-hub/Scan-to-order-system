@@ -2,6 +2,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import type { AdminState as BackendAdminState } from "../../../server/db";
 import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
+import { TABLE_CODE_PATTERN, validateTableInput } from "@shared/table-validation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -65,7 +66,81 @@ function Overview({ state, onGo }: { state: AdminState; onGo: (tab: Tab) => void
 
 function MenuManager({ state, onRefresh }: { state: AdminState; onRefresh: () => void }) { const [categoryName, setCategoryName] = useState(""); const [dish, setDish] = useState({ categoryId: "", name: "", description: "", price: "", imageUrl: "" }); const createCategory = trpc.admin.createCategory.useMutation({ onSuccess: () => { setCategoryName(""); onRefresh(); toast.success("分类已创建"); }, onError: error => toast.error(error.message) }); const createDish = trpc.admin.createDish.useMutation({ onSuccess: () => { setDish({ categoryId: dish.categoryId, name: "", description: "", price: "", imageUrl: "" }); onRefresh(); toast.success("菜品已创建"); }, onError: error => toast.error(error.message) }); const toggleDish = trpc.admin.setDishAvailability.useMutation({ onSuccess: onRefresh, onError: error => toast.error(error.message) }); return <><PageHeading eyebrow="MENU CATALOG" title="菜单管理" description="维护分类、菜名、说明与价格；下单时服务端会重新校验菜品状态。" /><div className="grid gap-5 xl:grid-cols-[.75fr_1.25fr]"><div className="space-y-5"><Panel title="新建分类" subtitle="例如：招牌菜、主食、饮品"><form onSubmit={event => { event.preventDefault(); if (categoryName.trim()) createCategory.mutate({ name: categoryName.trim(), sortOrder: state.categories.length }); }} className="flex gap-2"><Input value={categoryName} onChange={event => setCategoryName(event.target.value)} placeholder="分类名称" maxLength={80} /><Button type="submit" disabled={createCategory.isPending} className="shrink-0 bg-[#1d2926] text-white hover:bg-[#304640]"><Plus className="mr-1 h-4 w-4" />添加</Button></form></Panel><Panel title="新建菜品" subtitle="所有价格按人民币元填写"><form onSubmit={event => { event.preventDefault(); const cents = Math.round(Number(dish.price) * 100); if (!dish.categoryId || !dish.name.trim() || !Number.isFinite(cents) || cents <= 0) { toast.error("请完整填写分类、菜名和有效价格"); return; } createDish.mutate({ categoryId: Number(dish.categoryId), name: dish.name.trim(), description: dish.description, priceCents: cents, imageUrl: dish.imageUrl || undefined }); }} className="space-y-4"><Field label="所属分类" required><select value={dish.categoryId} onChange={event => setDish({ ...dish, categoryId: event.target.value })} className="h-10 w-full rounded-md border border-[#d7d8cf] bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#d66a4b]/30"><option value="">请选择分类</option>{state.categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field><Field label="菜品名称" required><Input value={dish.name} onChange={event => setDish({ ...dish, name: event.target.value })} placeholder="例如：砂锅鸡汤" maxLength={120} /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="价格（元）" required><Input type="number" min="0.01" step="0.01" value={dish.price} onChange={event => setDish({ ...dish, price: event.target.value })} placeholder="38.00" /></Field><Field label="图片地址"><Input type="url" value={dish.imageUrl} onChange={event => setDish({ ...dish, imageUrl: event.target.value })} placeholder="https://..." /></Field></div><Field label="菜品说明"><Textarea value={dish.description} onChange={event => setDish({ ...dish, description: event.target.value })} placeholder="口味、份量或过敏原说明" className="min-h-20 resize-none" maxLength={1000} /></Field><Button type="submit" disabled={createDish.isPending} className="w-full bg-[#d66a4b] text-white hover:bg-[#bf573b]">{createDish.isPending ? "保存中…" : "保存菜品"}</Button></form></Panel></div><Panel title="已配置菜单" subtitle={`${state.categories.length} 个分类 · ${state.dishes.length} 道菜品`}><div className="space-y-7">{state.categories.length === 0 ? <EmptyState icon={MenuIcon} title="还没有分类" text="先在左侧创建第一个分类，再录入真实菜品。" /> : state.categories.map(category => <div key={category.id}><div className="flex items-center justify-between border-b border-[#ecece5] pb-2"><h3 className="font-bold">{category.name}</h3><span className="text-xs text-[#8b968e]">{state.dishes.filter(dish => dish.categoryId === category.id).length} 道</span></div><div className="divide-y divide-[#f0f0e9]">{state.dishes.filter(dish => dish.categoryId === category.id).map(item => <div key={item.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><div className={`font-semibold ${item.isAvailable === 0 ? "text-[#a4aca5] line-through" : ""}`}>{item.name}</div><div className="mt-1 truncate text-xs text-[#7d887f]">{item.description || "未填写说明"}</div></div><div className="flex shrink-0 items-center gap-3"><span className="font-bold text-[#b95439]">{money(item.priceCents)}</span><button onClick={() => toggleDish.mutate({ dishId: item.id, isAvailable: item.isAvailable === 0 })} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${item.isAvailable === 1 ? "bg-[#e4f0e9] text-[#39705d]" : "bg-[#f0f1eb] text-[#7b867e]"}`}>{item.isAvailable === 1 ? "已上架" : "已下架"}</button></div></div>)}</div></div>)}</div></Panel></div></>; }
 
-function TableManager({ state, onRefresh }: { state: AdminState; onRefresh: () => void }) { const [form, setForm] = useState({ name: "", code: "" }); const [qr, setQr] = useState<Record<string, string>>({}); const create = trpc.admin.createTable.useMutation({ onSuccess: () => { setForm({ name: "", code: "" }); onRefresh(); toast.success("桌台已创建"); }, onError: error => toast.error(error.message) }); useEffect(() => { let active = true; const run = async () => { const entries = await Promise.all(state.tables.map(async table => [table.code, await QRCode.toDataURL(`${window.location.origin}/menu?table=${encodeURIComponent(table.code)}`, { margin: 1, width: 180, color: { dark: "#1d2926", light: "#ffffff" } })] as const)); if (active) setQr(Object.fromEntries(entries)); }; void run(); return () => { active = false; }; }, [state.tables]); const copyLink = async (code: string) => { await navigator.clipboard?.writeText(`${window.location.origin}/menu?table=${encodeURIComponent(code)}`); toast.success("点餐链接已复制"); }; return <><PageHeading eyebrow="TABLE ACCESS" title="桌台与二维码" description="每张桌台对应一个独立 code。打印二维码后，顾客扫码即可进入本桌菜单。" /><div className="grid gap-5 xl:grid-cols-[.72fr_1.28fr]"><Panel title="新建桌台" subtitle="桌台码会出现在点餐链接中"><form onSubmit={event => { event.preventDefault(); create.mutate(form); }} className="space-y-4"><Field label="桌台名称" required><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="例如：A01" maxLength={80} /></Field><Field label="桌台码" required><Input value={form.code} onChange={event => setForm({ ...form, code: event.target.value })} placeholder="例如：A01" pattern="[a-zA-Z0-9_-]+" maxLength={40} /><p className="mt-2 text-xs text-[#879189]">只能使用字母、数字、下划线和短横线。</p></Field><Button disabled={create.isPending} type="submit" className="w-full bg-[#1d2926] text-white hover:bg-[#304640]">{create.isPending ? "创建中…" : "创建桌台并生成二维码"}</Button></form></Panel><Panel title="已配置桌台" subtitle={`${state.tables.length} 张桌台`}><div className="grid gap-4 sm:grid-cols-2">{state.tables.length === 0 ? <div className="sm:col-span-2"><EmptyState icon={QrCode} title="还没有桌台" text="创建第一张桌台后，系统会生成可打印二维码。" /></div> : state.tables.map(table => { const url = `${window.location.origin}/menu?table=${encodeURIComponent(table.code)}`; return <div key={table.id} className="rounded-2xl border border-[#e4e5dd] bg-white p-4"><div className="flex items-start justify-between"><div><div className="font-bold">{table.name}</div><div className="mono mt-1 text-xs text-[#7d887f]">{table.code}</div></div><Badge className={table.status === "occupied" ? "bg-[#fff0db] text-[#9d6420]" : table.status === "disabled" ? "bg-[#f0f1eb] text-[#7b867e]" : "bg-[#e4f0e9] text-[#39705d]"}>{table.status === "occupied" ? "用餐中" : table.status === "disabled" ? "已停用" : "空闲"}</Badge></div><div className="mt-4 flex justify-center rounded-xl bg-[#f4f5ef] p-3">{qr[table.code] ? <img src={qr[table.code]} alt={`${table.name}点餐二维码`} className="h-36 w-36" /> : <div className="grid h-36 w-36 place-items-center text-xs text-[#8b968e]">生成中…</div>}</div><div className="mt-3 flex gap-2"><Button variant="outline" onClick={() => copyLink(table.code)} className="flex-1 border-[#d7d8cf] bg-white text-xs"><Copy className="mr-1.5 h-3.5 w-3.5" />复制链接</Button><a href={url} target="_blank" rel="noreferrer" className="grid h-9 w-9 place-items-center rounded-md border border-[#d7d8cf] text-[#68736d] hover:bg-[#fff3eb]" aria-label="打开点餐页面"><ExternalLink className="h-4 w-4" /></a></div></div>; })}</div></Panel></div></>; }
+function TableManager({ state, onRefresh }: { state: AdminState; onRefresh: () => void }) {
+  const [form, setForm] = useState({ name: "", code: "" });
+  const [qr, setQr] = useState<Record<string, string>>({});
+  const codePattern = TABLE_CODE_PATTERN;
+  const trimmedName = form.name.trim();
+  const trimmedCode = form.code.trim();
+  const tableValidationError = validateTableInput(form);
+  const canSubmit = !tableValidationError;
+  const create = trpc.admin.createTable.useMutation({
+    onSuccess: () => {
+      setForm({ name: "", code: "" });
+      onRefresh();
+      toast.success("桌台已创建");
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  useEffect(() => {
+    let active = true;
+    const run = async () => {
+      const entries = await Promise.all(state.tables.map(async table => [
+        table.code,
+        await QRCode.toDataURL(`${window.location.origin}/menu?table=${encodeURIComponent(table.code)}`, {
+          margin: 1,
+          width: 180,
+          color: { dark: "#1d2926", light: "#ffffff" },
+        }),
+      ] as const));
+      if (active) setQr(Object.fromEntries(entries));
+    };
+    void run();
+    return () => { active = false; };
+  }, [state.tables]);
+
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const validationError = validateTableInput(form);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+    create.mutate({ name: trimmedName, code: trimmedCode });
+  };
+
+  const copyLink = async (code: string) => {
+    await navigator.clipboard?.writeText(`${window.location.origin}/menu?table=${encodeURIComponent(code)}`);
+    toast.success("点餐链接已复制");
+  };
+
+  return <>
+    <PageHeading eyebrow="TABLE ACCESS" title="桌台与二维码" description="每张桌台对应一个独立 code。打印二维码后，顾客扫码即可进入本桌菜单。" />
+    <div className="grid gap-5 xl:grid-cols-[.72fr_1.28fr]">
+      <Panel title="新建桌台" subtitle="桌台码会出现在点餐链接中">
+        <form onSubmit={submit} className="space-y-4" noValidate>
+          <Field label="桌台名称" required>
+            <Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="例如：A01" maxLength={80} required aria-invalid={form.name.length > 0 && !trimmedName} />
+          </Field>
+          <Field label="桌台码" required>
+            <Input value={form.code} onChange={event => setForm({ ...form, code: event.target.value })} placeholder="例如：A01" pattern="[a-zA-Z0-9_-]+" minLength={2} maxLength={40} required aria-invalid={form.code.length > 0 && !/^[a-zA-Z0-9_-]+$/.test(form.code.trim())} />
+            {form.code.length > 0 && (trimmedCode.length < 2 || !codePattern.test(trimmedCode)) ? <p className="mt-2 text-xs text-[#b95439]">桌台码至少 2 位，只能使用字母、数字、下划线和短横线。</p> : <p className="mt-2 text-xs text-[#879189]">建议使用 A01、B02 这类易识别的编码。</p>}
+          </Field>
+          <Button disabled={create.isPending || !canSubmit} type="submit" className="w-full bg-[#1d2926] text-white hover:bg-[#304640] disabled:cursor-not-allowed disabled:opacity-50">{create.isPending ? "创建中…" : "创建桌台并生成二维码"}</Button>
+        </form>
+      </Panel>
+      <Panel title="已配置桌台" subtitle={`${state.tables.length} 张桌台`}>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {state.tables.length === 0 ? <div className="sm:col-span-2"><EmptyState icon={QrCode} title="还没有桌台" text="创建第一张桌台后，系统会生成可打印二维码。" /></div> : state.tables.map(table => {
+            const url = `${window.location.origin}/menu?table=${encodeURIComponent(table.code)}`;
+            return <div key={table.id} className="rounded-2xl border border-[#e4e5dd] bg-white p-4"><div className="flex items-start justify-between"><div><div className="font-bold">{table.name}</div><div className="mono mt-1 text-xs text-[#7d887f]">{table.code}</div></div><Badge className={table.status === "occupied" ? "bg-[#fff0db] text-[#9d6420]" : table.status === "disabled" ? "bg-[#f0f1eb] text-[#7b867e]" : "bg-[#e4f0e9] text-[#39705d]"}>{table.status === "occupied" ? "用餐中" : table.status === "disabled" ? "已停用" : "空闲"}</Badge></div><div className="mt-4 flex justify-center rounded-xl bg-[#f4f5ef] p-3">{qr[table.code] ? <img src={qr[table.code]} alt={`${table.name}点餐二维码`} className="h-36 w-36" /> : <div className="grid h-36 w-36 place-items-center text-xs text-[#8b968e]">生成中…</div>}</div><div className="mt-3 flex gap-2"><Button variant="outline" onClick={() => copyLink(table.code)} className="flex-1 border-[#d7d8cf] bg-white text-xs"><Copy className="mr-1.5 h-3.5 w-3.5" />复制链接</Button><a href={url} target="_blank" rel="noreferrer" className="grid h-9 w-9 place-items-center rounded-md border border-[#d7d8cf] text-[#68736d] hover:bg-[#fff3eb]" aria-label="打开点餐页面"><ExternalLink className="h-4 w-4" /></a></div></div>;
+          })}
+        </div>
+      </Panel>
+    </div>
+  </>;
+}
 
 function OrderManager({ state, onRefresh }: { state: AdminState; onRefresh: () => void }) { const update = trpc.admin.updateOrderStatus.useMutation({ onSuccess: onRefresh, onError: error => toast.error(error.message) }); const itemMap = useMemo(() => { const map = new Map<number, string[]>(); for (const item of state.orderItems) { const list = map.get(item.orderId) ?? []; list.push(`${item.dishName} × ${item.quantity}`); map.set(item.orderId, list); } return map; }, [state.orderItems]); return <><PageHeading eyebrow="ORDER QUEUE" title="订单处理" description="订单状态由门店推进；完成或取消订单后，对应桌台会自动恢复为空闲。" /><div className="rounded-3xl border border-[#e1e3db] bg-[#fffefa] shadow-sm"><div className="flex items-center justify-between border-b border-[#ecece5] px-5 py-5 sm:px-7"><div><div className="font-bold">全部订单</div><div className="mt-1 text-sm text-[#7d887f]">最近 100 笔订单</div></div><Badge className="bg-[#fbe8dc] text-[#a54e36]">{state.orders.length} 笔</Badge></div>{state.orders.length === 0 ? <div className="p-10"><EmptyState icon={ClipboardList} title="还没有真实订单" text="顾客扫码下单后，订单会实时出现在这里。" /></div> : <div className="divide-y divide-[#ecece5]">{state.orders.map(order => <div key={order.id} className="grid gap-4 px-5 py-5 sm:grid-cols-[1fr_auto] sm:px-7"><div><div className="flex flex-wrap items-center gap-2"><span className="mono font-bold">{order.orderNumber}</span><StatusBadge status={order.status} /><span className="text-xs text-[#8b968e]">{dateTime(order.createdAt)}</span></div><div className="mt-3 flex flex-wrap gap-2 text-sm text-[#55645c]">{(itemMap.get(order.id) ?? []).map(item => <span key={item} className="rounded-lg bg-[#f1f3ed] px-2.5 py-1">{item}</span>)}</div>{order.customerNote && <div className="mt-3 rounded-xl bg-[#fff5e9] px-3 py-2 text-sm text-[#8b6338]">顾客备注：{order.customerNote}</div>}<div className="mt-3 font-bold text-[#b95439]">合计 {money(order.totalCents)} <span className="ml-2 text-xs font-normal text-[#8b968e]">· 到店支付 · {order.paymentStatus === "paid" ? "已支付" : "未支付"}</span></div></div><div className="flex items-center gap-2 sm:self-center"><select value={order.status} onChange={event => update.mutate({ orderId: order.id, status: event.target.value as typeof nextStatuses[number] })} className="h-10 min-w-28 rounded-lg border border-[#d7d8cf] bg-white px-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#d66a4b]/30">{nextStatuses.map(status => <option key={status} value={status}>{orderStatus[status].label}</option>)}</select></div></div>)}</div>}</div></>; }
 
