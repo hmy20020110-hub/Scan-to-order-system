@@ -19,7 +19,7 @@
 | 顾客端 / 商家端 | React 19、Vite、Tailwind CSS 4、shadcn/ui、Recharts |
 | API | tRPC 11、Express 5、Zod |
 | 数据库 | MySQL / TiDB、Drizzle ORM、迁移 SQL |
-| 文件 | Manus Storage / S3-compatible storage |
+| 文件 | Manus Storage / S3-compatible storage；Windows 线下版支持本地目录 |
 | 认证 | Manus OAuth + 商家数字登录码会话 |
 | 测试 | Vitest、TypeScript check、Vite production build |
 
@@ -37,6 +37,7 @@ server/
   db.ts                          Drizzle 查询、事务和销售聚合
   order-utils.ts                 菜品、规格和订单金额校验
   payment-callbacks.ts           支付回调签名、时效和输入校验
+  payment-config.ts              微信支付密钥 AES-256-GCM 加密
   storage.ts                     图片对象存储封装
   *_test.ts                      服务端单元测试
 server/_core/
@@ -47,6 +48,7 @@ drizzle/
 docs/
   DEPLOYMENT.md                  部署和上线检查清单
   PAYMENT-CALLBACKS.md           支付回调测试契约和联调说明
+  WINDOWS-EXE.md                 Windows EXE、本地数据库和文件目录方案
   SECURITY-AUDIT.md              安全审计、修复和真实流程验收记录
   github-research.md             开源方案调研记录
 shared/                           前后端共享常量和校验
@@ -81,6 +83,7 @@ pnpm install
 | `WECHAT_PAYMENT_CALLBACK_SECRET` | 微信支付上线时 | 微信适配器回调签名密钥；不要提交到 Git |
 | `BUILT_IN_FORGE_API_URL` | 使用平台存储时 | Manus 内置 API 地址 |
 | `BUILT_IN_FORGE_API_KEY` | 使用平台存储时 | 服务端存储 API 密钥 |
+| `LOCAL_STORAGE_DIR` | Windows 线下版 | 本地图片目录；配置后不再调用平台对象存储 |
 
 ### 数据库迁移
 
@@ -112,6 +115,10 @@ pnpm test
 pnpm build
 pnpm start
 ```
+
+### Windows EXE
+
+Windows 线下版采用本机 MariaDB/MySQL 8 保存业务数据，EXE 打包 Node 服务和前端资源，图片写入 `LOCAL_STORAGE_DIR`。执行 `pnpm package:win` 生成 `packaging/windows/ScanToOrder/`，完整安装和备份要求见 [`docs/WINDOWS-EXE.md`](docs/WINDOWS-EXE.md)。
 
 ## 支付回调设计
 

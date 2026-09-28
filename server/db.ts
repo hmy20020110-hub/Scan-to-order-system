@@ -11,6 +11,7 @@ import {
   User,
   dishes,
   diningTables,
+  merchantPaymentConfigs,
   menuCategories,
   orderItems,
   orders,
@@ -409,3 +410,39 @@ export async function updateOrderPaymentStatusByOwner(
 export type AdminState = Awaited<ReturnType<typeof getRestaurantState>>;
 export type PublicMenu = Awaited<ReturnType<typeof getPublicMenuByTable>>;
 export type { DiningTable, Dish, MenuCategory, Order, OrderItem, Restaurant };
+
+
+export async function getMerchantPaymentConfig(restaurantId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(merchantPaymentConfigs)
+    .where(eq(merchantPaymentConfigs.restaurantId, restaurantId))
+    .limit(1);
+  return rows[0];
+}
+
+export async function saveMerchantPaymentConfig(values: {
+  restaurantId: number;
+  merchantIdEncrypted: string;
+  apiV3KeyEncrypted: string;
+  certificateSerial: string | null;
+  certificatePemEncrypted: string;
+  privateKeyPemEncrypted: string;
+  enabled: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  await db.insert(merchantPaymentConfigs).values(values).onDuplicateKeyUpdate({
+    set: {
+      merchantIdEncrypted: values.merchantIdEncrypted,
+      apiV3KeyEncrypted: values.apiV3KeyEncrypted,
+      certificateSerial: values.certificateSerial,
+      certificatePemEncrypted: values.certificatePemEncrypted,
+      privateKeyPemEncrypted: values.privateKeyPemEncrypted,
+      enabled: values.enabled,
+      updatedAt: new Date(),
+    },
+  });
+}

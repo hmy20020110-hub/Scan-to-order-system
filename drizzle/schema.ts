@@ -131,6 +131,23 @@ export const paymentTransactions = mysqlTable(
   }),
 );
 
+/** Merchant-entered WeChat credentials, encrypted at rest and never returned to the browser. */
+export const merchantPaymentConfigs = mysqlTable(
+  "merchantPaymentConfigs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    restaurantId: int("restaurantId").notNull().unique(),
+    merchantIdEncrypted: text("merchantIdEncrypted").notNull(),
+    apiV3KeyEncrypted: text("apiV3KeyEncrypted").notNull(),
+    certificateSerial: varchar("certificateSerial", { length: 64 }),
+    certificatePemEncrypted: text("certificatePemEncrypted").notNull(),
+    privateKeyPemEncrypted: text("privateKeyPemEncrypted").notNull(),
+    enabled: int("enabled").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+);
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Restaurant = typeof restaurants.$inferSelect;
@@ -140,3 +157,4 @@ export type DiningTable = typeof diningTables.$inferSelect;
 export type Order = typeof orders.$inferSelect;
 export type OrderItem = typeof orderItems.$inferSelect;
 export type PaymentTransaction = typeof paymentTransactions.$inferSelect;
+export type MerchantPaymentConfig = typeof merchantPaymentConfigs.$inferSelect;

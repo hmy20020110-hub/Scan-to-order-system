@@ -11,7 +11,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:payment": "vitest run server/payment-callbacks.test.ts server/payment-flow.test.ts",
-    "db:push": "drizzle-kit generate && drizzle-kit migrate"
+    "db:push": "drizzle-kit generate && drizzle-kit migrate",
+    "package:win": "pnpm build && node scripts/package-windows.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1141.0",
@@ -90,6 +91,7 @@
     "@types/react": "^19.2.1",
     "@types/react-dom": "^19.2.1",
     "@vitejs/plugin-react": "^5.2.0",
+    "@yao-pkg/pkg": "^6.12.0",
     "add": "^2.0.6",
     "autoprefixer": "^10.6.1",
     "browserslist": "^4.28.7",

@@ -22,11 +22,13 @@ import {
   getPublicMenuByTable,
   getRestaurantByOwner,
   getSalesAnalytics,
+  getMerchantPaymentConfig,
   getRestaurantState,
   insertOrderWithItems,
   updateMerchantLoginState,
   updateOrderPaymentStatusByOwner,
   updateOrderStatusByOwner,
+  saveMerchantPaymentConfig,
 } from "./db";
 import { TRPCError } from "@trpc/server";
 import { calculateOrderTotal, normalizeOrderItems } from "./order-utils";
@@ -35,6 +37,7 @@ import {
   validatePaymentCallback,
 } from "./payment-callbacks";
 import { storagePut } from "./storage";
+import { encryptPaymentSecret, paymentConfigInput } from "./payment-config";
 
 const restaurantInput = z.object({
   name: z.string().trim().min(1, "请输入门店名称").max(120),
@@ -335,6 +338,38 @@ export const appRouter = router({
         const updated = await updateOrderPaymentStatusByOwner(ctx.user.id, input.orderId, input.paymentStatus);
         if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "订单不存在" });
         return { success: true } as const;
+      }),
+    getPaymentConfig: adminOnly.query(async ({ ctx }) => {
+      const restaurant = await getRestaurantByOwner(ctx.user.id);
+      if (!restaurant) throw new TRPCError({ code: "NOT_FOUND", message: "请先完成门店设置" });
+      const config = await getMerchantPaymentConfig(restaurant.id);
+      if (!config) return { configured: false, enabled: false, merchantId: null, apiV3Key: null, certificateSerial: null };
+      return {
+        configured: true,
+        enabled: config.enabled === 1,
+        merchantId: "已加密保存",
+        apiV3Key: "已加密保存",
+        certificateSerial: config.certificateSerial,
+      };
+    }),
+    savePaymentConfig: adminOnly
+      .input(paymentConfigInput)
+      .mutation(async ({ ctx, input }) => {
+        const restaurant = await getRestaurantByOwner(ctx.user.id);
+        if (!restaurant) throw new TRPCError({ code: "NOT_FOUND", message: "请先完成门店设置" });
+        if (!ENV.cookieSecret || ENV.cookieSecret.length < 32) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "JWT_SECRET 未配置或强度不足，不能保存支付密钥" });
+        }
+        await saveMerchantPaymentConfig({
+          restaurantId: restaurant.id,
+          merchantIdEncrypted: encryptPaymentSecret(input.merchantId),
+          apiV3KeyEncrypted: encryptPaymentSecret(input.apiV3Key),
+          certificateSerial: input.certificateSerial || null,
+          certificatePemEncrypted: encryptPaymentSecret(input.certificatePem),
+          privateKeyPemEncrypted: encryptPaymentSecret(input.privateKeyPem),
+          enabled: input.enabled ? 1 : 0,
+        });
+        return { success: true as const, enabled: input.enabled };
       }),
     changeMerchantLoginCode: adminOnly
       .input(z.object({ currentCode: z.string().regex(MERCHANT_CODE_PATTERN, "原登录码必须是 8 位数字"), newCode: z.string().regex(MERCHANT_CODE_PATTERN, "新登录码必须是 8 位数字") }))
