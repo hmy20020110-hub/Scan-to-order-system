@@ -9,6 +9,7 @@ const dish = (overrides: Partial<Dish> = {}): Dish => ({
   description: "",
   priceCents: 3800,
   imageUrl: null,
+  specifications: null,
   sortOrder: 0,
   isAvailable: 1,
   createdAt: new Date(),
@@ -26,6 +27,16 @@ describe("order utils", () => {
   it("rejects unavailable or unknown dishes", () => {
     expect(() => normalizeOrderItems([{ dishId: 99, quantity: 1 }], [dish()])).toThrow("DISH_UNAVAILABLE");
     expect(() => normalizeOrderItems([{ dishId: 7, quantity: 1 }], [dish({ isAvailable: 0 })])).toThrow("DISH_UNAVAILABLE");
+  });
+
+  it("validates selected specifications and snapshots their price delta", () => {
+    const items = normalizeOrderItems(
+      [{ dishId: 7, quantity: 1, specs: [{ group: "辣度", option: "特辣" }] }],
+      [dish({ specifications: JSON.stringify([{ name: "辣度", options: [{ name: "不辣", priceDeltaCents: 0 }, { name: "特辣", priceDeltaCents: 300 }] }]) })],
+    );
+    expect(items[0]).toMatchObject({ unitPriceCents: 4100, note: "辣度：特辣" });
+    expect(() => normalizeOrderItems([{ dishId: 7, quantity: 1 }], [dish({ specifications: JSON.stringify([{ name: "辣度", options: [{ name: "不辣", priceDeltaCents: 0 }] }]) })])).toThrow("INVALID_DISH_SPECIFICATION");
+    expect(() => normalizeOrderItems([{ dishId: 7, quantity: 1, specs: [{ group: "辣度", option: "不存在" }] }], [dish({ specifications: JSON.stringify([{ name: "辣度", options: [{ name: "不辣", priceDeltaCents: 0 }] }]) })])).toThrow("INVALID_DISH_SPECIFICATION");
   });
 
   it("returns zero for an empty normalized list", () => {

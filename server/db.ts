@@ -8,6 +8,7 @@ import {
   Order,
   OrderItem,
   Restaurant,
+  User,
   dishes,
   diningTables,
   menuCategories,
@@ -71,6 +72,15 @@ export async function getUserByOpenId(openId: string) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
   return result[0];
+}
+
+export async function updateMerchantLoginState(
+  openId: string,
+  values: Partial<Pick<User, "merchantCodeHash" | "merchantLoginFailedAttempts" | "merchantLoginLockedUntil">>,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  await db.update(users).set(values).where(eq(users.openId, openId));
 }
 
 export async function getRestaurantByOwner(ownerId: number): Promise<Restaurant | undefined> {

@@ -22,6 +22,13 @@
       "when": 1790522926508,
       "tag": "0002_unusual_squirrel_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1790566803045,
+      "tag": "0003_shiny_nemesis",
+      "breakpoints": true
     }
   ]
 }

@@ -7,6 +7,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
 import { sdk } from "./_core/sdk";
 import { ENV } from "./_core/env";
+import { hashMerchantCode, MERCHANT_CODE_PATTERN, verifyMerchantCode } from "./auth-code";
 import {
   diningTables,
   dishes,
@@ -21,11 +22,13 @@ import {
   getRestaurantByOwner,
   getRestaurantState,
   insertOrderWithItems,
+  updateMerchantLoginState,
   updateOrderPaymentStatusByOwner,
   updateOrderStatusByOwner,
 } from "./db";
 import { TRPCError } from "@trpc/server";
 import { calculateOrderTotal, normalizeOrderItems } from "./order-utils";
+import { storagePut } from "./storage";
 
 const restaurantInput = z.object({
   name: z.string().trim().min(1, "请输入门店名称").max(120),
@@ -46,11 +49,8 @@ export const appRouter = router({
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     merchantLogin: publicProcedure
-      .input(z.object({ code: z.string().regex(/^\d{8}$/, "请输入 8 位数字登录码") }))
+      .input(z.object({ code: z.string().regex(MERCHANT_CODE_PATTERN, "请输入 8 位数字登录码") }))
       .mutation(async ({ ctx, input }) => {
-        if (input.code !== ENV.merchantLoginCode) {
-          throw new TRPCError({ code: "UNAUTHORIZED", message: "登录码不正确" });
-        }
         if (!ENV.ownerOpenId) {
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "商家账号尚未配置" });
         }
@@ -58,6 +58,26 @@ export const appRouter = router({
         if (!owner || owner.role !== "admin") {
           throw new TRPCError({ code: "FORBIDDEN", message: "商家管理员账号尚未初始化" });
         }
+        const now = new Date();
+        if (owner.merchantLoginLockedUntil && owner.merchantLoginLockedUntil.getTime() > now.getTime()) {
+          const seconds = Math.ceil((owner.merchantLoginLockedUntil.getTime() - now.getTime()) / 1000);
+          throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `登录已锁定，请 ${seconds} 秒后重试` });
+        }
+        const valid = owner.merchantCodeHash
+          ? verifyMerchantCode(input.code, owner.merchantCodeHash)
+          : input.code === ENV.merchantLoginCode;
+        if (!valid) {
+          const attempts = owner.merchantLoginFailedAttempts + 1;
+          const lockedUntil = attempts >= 5 ? new Date(now.getTime() + 15 * 60 * 1000) : null;
+          await updateMerchantLoginState(ENV.ownerOpenId, { merchantLoginFailedAttempts: attempts, merchantLoginLockedUntil: lockedUntil });
+          if (lockedUntil) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "连续 5 次输入错误，登录已锁定 15 分钟" });
+          throw new TRPCError({ code: "UNAUTHORIZED", message: `登录码不正确，还可尝试 ${5 - attempts} 次` });
+        }
+        await updateMerchantLoginState(ENV.ownerOpenId, {
+          merchantCodeHash: owner.merchantCodeHash ?? hashMerchantCode(input.code),
+          merchantLoginFailedAttempts: 0,
+          merchantLoginLockedUntil: null,
+        });
         const token = await sdk.createSessionToken(ENV.ownerOpenId, { name: owner.name ?? "门店管理员" });
         const cookieOptions = getSessionCookieOptions(ctx.req);
         ctx.res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: 1000 * 60 * 60 * 24 * 30 });
@@ -89,6 +109,7 @@ export const appRouter = router({
                   dishId: z.number().int().positive(),
                   quantity: z.number().int().min(1).max(99),
                   note: z.string().trim().max(200).optional().or(z.literal("")),
+                  specs: z.array(z.object({ group: z.string().trim().min(1).max(80), option: z.string().trim().min(1).max(80) })).max(20).optional(),
                 }),
               )
               .min(1, "购物车不能为空"),
@@ -184,6 +205,7 @@ export const appRouter = router({
           description: z.string().trim().max(1000).optional().or(z.literal("")),
           priceCents: z.number().int().positive().max(99999999),
           imageUrl: z.string().trim().url().max(1000).optional().or(z.literal("")),
+          specifications: z.string().trim().max(5000).optional().or(z.literal("")),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -200,10 +222,28 @@ export const appRouter = router({
           description: input.description || null,
           priceCents: input.priceCents,
           imageUrl: input.imageUrl || null,
+          specifications: input.specifications || null,
           isAvailable: 1,
           sortOrder: 0,
         });
         return { id: Number(result[0].insertId) };
+      }),
+    uploadDishImage: adminOnly
+      .input(z.object({ fileName: z.string().trim().max(120), dataUrl: z.string().max(7000000) }))
+      .mutation(async ({ ctx, input }) => {
+        const match = input.dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/);
+        if (!match) throw new TRPCError({ code: "BAD_REQUEST", message: "只支持 PNG、JPG、WEBP 或 GIF 图片" });
+        const contentType = match[1];
+        const data = Buffer.from(match[2], "base64");
+        if (data.length === 0 || data.length > 5 * 1024 * 1024) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "图片大小需在 5MB 以内" });
+        }
+        const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80) || "dish-image";
+        try {
+          return await storagePut(`dishes/${ctx.user.id}/${Date.now()}-${safeName}`, data, contentType);
+        } catch (error) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error instanceof Error ? error.message : "图片上传失败" });
+        }
       }),
     setDishAvailability: adminOnly
       .input(z.object({ dishId: z.number().int().positive(), isAvailable: z.boolean() }))
@@ -242,6 +282,23 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const updated = await updateOrderPaymentStatusByOwner(ctx.user.id, input.orderId, input.paymentStatus);
         if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "订单不存在" });
+        return { success: true } as const;
+      }),
+    changeMerchantLoginCode: adminOnly
+      .input(z.object({ currentCode: z.string().regex(MERCHANT_CODE_PATTERN, "原登录码必须是 8 位数字"), newCode: z.string().regex(MERCHANT_CODE_PATTERN, "新登录码必须是 8 位数字") }))
+      .mutation(async ({ ctx, input }) => {
+        const owner = await getUserByOpenId(ctx.user.openId);
+        if (!owner) throw new TRPCError({ code: "NOT_FOUND", message: "商家账号不存在" });
+        const currentValid = owner.merchantCodeHash
+          ? verifyMerchantCode(input.currentCode, owner.merchantCodeHash)
+          : input.currentCode === ENV.merchantLoginCode;
+        if (!currentValid) throw new TRPCError({ code: "UNAUTHORIZED", message: "原登录码不正确" });
+        if (input.currentCode === input.newCode) throw new TRPCError({ code: "BAD_REQUEST", message: "新登录码不能与原登录码相同" });
+        await updateMerchantLoginState(ctx.user.openId, {
+          merchantCodeHash: hashMerchantCode(input.newCode),
+          merchantLoginFailedAttempts: 0,
+          merchantLoginLockedUntil: null,
+        });
         return { success: true } as const;
       }),
   }),

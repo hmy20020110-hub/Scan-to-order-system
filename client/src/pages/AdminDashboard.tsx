@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import * as QRCode from "qrcode";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { BarChart3, Check, ClipboardList, Copy, ExternalLink, LayoutDashboard, LogOut, Menu as MenuIcon, Plus, QrCode, Settings, Store, Table2, UtensilsCrossed } from "lucide-react";
 
@@ -24,6 +24,7 @@ const orderStatus: Record<string, { label: string; className: string }> = {
 };
 const nextStatuses = ["pending", "confirmed", "preparing", "ready", "served", "cancelled"] as const;
 type Tab = "overview" | "menu" | "tables" | "orders" | "settings";
+type SpecDraft = { name: string; options: Array<{ name: string; price: string }> };
 
 export default function AdminDashboard() {
   const { user, loading, logout } = useAuth();
@@ -34,6 +35,23 @@ export default function AdminDashboard() {
     refetchInterval: user?.role === "admin" ? 5000 : false,
   });
   const state = stateQuery.data;
+  const knownOrderIds = useRef<Set<number> | null>(null);
+
+  useEffect(() => {
+    if (user?.role !== "admin" || !state) return;
+    const currentIds = new Set(state.orders.map(order => order.id));
+    if (knownOrderIds.current === null) {
+      knownOrderIds.current = currentIds;
+      return;
+    }
+    const newOrders = state.orders.filter(order => !knownOrderIds.current?.has(order.id));
+    knownOrderIds.current = currentIds;
+    if (newOrders.length > 0) {
+      const first = newOrders[0];
+      toast.success(`新订单 ${first?.orderNumber ?? ""}`, { description: `${newOrders.length > 1 ? `新增 ${newOrders.length} 笔订单 · ` : ""}请及时确认并安排出餐`, duration: 9000 });
+      playNewOrderSound();
+    }
+  }, [state, user?.role]);
 
   if (loading) return <LoadingScreen />;
   if (!user) return <LoginScreen />;
@@ -54,17 +72,59 @@ export default function AdminDashboard() {
 }
 
 function LoadingScreen({ label = "正在加载…" }: { label?: string }) { return <div className="grid min-h-screen place-items-center bg-[#f7f6f1] text-[#68736d]"><div className="text-center"><div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-4 border-[#ead5c8] border-t-[#d66a4b]" /><p>{label}</p></div></div>; }
+function playNewOrderSound() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, context.currentTime);
+    oscillator.frequency.setValueAtTime(660, context.currentTime + 0.16);
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.42);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.45);
+    window.setTimeout(() => void context.close(), 700);
+  } catch {
+    // Browsers can block audio until the merchant has interacted with the page.
+  }
+}
 function LoginScreen() {
   const utils = trpc.useUtils();
   const [code, setCode] = useState("");
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
+  useEffect(() => {
+    if (!lockedUntil) { setRemainingSeconds(0); return; }
+    const update = () => {
+      const seconds = Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000));
+      setRemainingSeconds(seconds);
+      if (seconds === 0) setLockedUntil(null);
+    };
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [lockedUntil]);
   const login = trpc.auth.merchantLogin.useMutation({
     onSuccess: async () => {
+      setLockedUntil(null);
       await utils.auth.me.invalidate();
       toast.success("登录成功");
     },
-    onError: error => toast.error(error.message),
+    onError: error => {
+      const seconds = Number(error.message.match(/(\d+) 秒/)?.[1] ?? 0);
+      if (error.message.includes("锁定 15 分钟")) setLockedUntil(Date.now() + 15 * 60 * 1000);
+      else if (seconds > 0) setLockedUntil(Date.now() + seconds * 1000);
+      toast.error(error.message);
+    },
   });
-  return <div className="grid min-h-screen place-items-center bg-[#1d2926] p-5"><div className="w-full max-w-md rounded-[2rem] bg-[#f7f6f1] p-8 text-center sm:p-10"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#d66a4b] text-white"><UtensilsCrossed className="h-7 w-7" /></div><div className="mono mt-7 text-[10px] uppercase tracking-[.25em] text-[#d66a4b]">MERCHANT CONSOLE</div><h1 className="mt-2 text-3xl font-extrabold tracking-tight">登录管理后台</h1><p className="mt-3 leading-6 text-[#738078]">请输入门店管理员数字登录码。顾客无需登录即可通过桌台二维码点餐。</p><form onSubmit={event => { event.preventDefault(); if (code.length !== 8) { toast.error("请输入 8 位数字登录码"); return; } login.mutate({ code }); }} className="mt-7"><Input type="password" inputMode="numeric" autoComplete="one-time-code" maxLength={8} pattern="[0-9]{8}" value={code} onChange={event => setCode(event.target.value.replace(/\\D/g, "").slice(0, 8))} placeholder="请输入 8 位数字登录码" className="h-12 bg-white text-center text-xl tracking-[.35em]" aria-label="商家数字登录码" /><Button type="submit" disabled={login.isPending || code.length !== 8} className="mt-4 h-12 w-full rounded-xl bg-[#1d2926] text-white hover:bg-[#304640]">{login.isPending ? "验证中…" : "进入管理后台"}</Button></form><Link href="/"><Button variant="ghost" className="mt-2 text-[#748078]">返回首页</Button></Link></div></div>;
+  const locked = remainingSeconds > 0;
+  return <div className="grid min-h-screen place-items-center bg-[#1d2926] p-5"><div className="w-full max-w-md rounded-[2rem] bg-[#f7f6f1] p-8 text-center sm:p-10"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#d66a4b] text-white"><UtensilsCrossed className="h-7 w-7" /></div><div className="mono mt-7 text-[10px] uppercase tracking-[.25em] text-[#d66a4b]">MERCHANT CONSOLE</div><h1 className="mt-2 text-3xl font-extrabold tracking-tight">登录管理后台</h1><p className="mt-3 leading-6 text-[#738078]">请输入门店管理员数字登录码。顾客无需登录即可通过桌台二维码点餐。</p>{locked && <div className="mt-5 rounded-xl border border-[#efc6bd] bg-[#fff1ed] px-4 py-3 text-sm font-semibold text-[#a64b43]">登录已锁定，请等待 <span className="mono">{Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, "0")}</span> 后重试</div>}<form onSubmit={event => { event.preventDefault(); if (locked) return; if (code.length !== 8) { toast.error("请输入 8 位数字登录码"); return; } login.mutate({ code }); }} className="mt-7"><Input type="password" inputMode="numeric" autoComplete="one-time-code" maxLength={8} pattern="[0-9]{8}" value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="请输入 8 位数字登录码" className="h-12 bg-white text-center text-xl tracking-[.35em]" aria-label="商家数字登录码" disabled={locked} /><Button type="submit" disabled={login.isPending || locked || code.length !== 8} className="mt-4 h-12 w-full rounded-xl bg-[#1d2926] text-white hover:bg-[#304640]">{locked ? "暂时锁定" : login.isPending ? "验证中…" : "进入管理后台"}</Button></form><Link href="/"><Button variant="ghost" className="mt-2 text-[#748078]">返回首页</Button></Link></div></div>;
 }
 function ForbiddenScreen({ onLogout }: { onLogout: () => void }) { return <div className="grid min-h-screen place-items-center bg-[#f7f6f1] p-6 text-center"><div><ShieldIcon /><h1 className="mt-5 text-2xl font-bold">当前账号没有管理权限</h1><p className="mt-2 text-[#738078]">请使用门店管理员账号登录，或联系系统所有者开通权限。</p><Button onClick={onLogout} variant="outline" className="mt-6">退出当前账号</Button></div></div>; }
 function ShieldIcon() { return <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[#fbe8dc] text-[#b95439]"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 4.5 6v5.5c0 4.7 3.2 8 7.5 9.5 4.3-1.5 7.5-4.8 7.5-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg></div>; }
@@ -78,7 +138,47 @@ function Onboarding({ onCreated }: { onCreated: () => void }) {
 
 function Overview({ state, onGo }: { state: AdminState; onGo: (tab: Tab) => void }) { const pending = state.orders.filter(order => ["pending", "confirmed", "preparing", "ready"].includes(order.status)).length; const revenue = state.orders.filter(order => order.status !== "cancelled").reduce((sum, order) => sum + order.totalCents, 0); return <><PageHeading eyebrow="TODAY AT A GLANCE" title="经营概览" description="从真实业务数据开始，订单和菜单都由你的门店维护。" action={<Button onClick={() => onGo("orders")} className="bg-[#d66a4b] text-white hover:bg-[#bf573b]"><ClipboardList className="mr-2 h-4 w-4" />处理订单</Button>} /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="待处理订单" value={String(pending)} hint="当前进行中的订单" icon={ClipboardList} accent="orange" /><Stat label="今日订单总额" value={money(revenue)} hint="含未取消订单" icon={BarChart3} accent="green" /><Stat label="已配置桌台" value={String(state.tables.length)} hint="可生成独立二维码" icon={Table2} accent="purple" /><Stat label="已上架菜品" value={String(state.dishes.filter(dish => dish.isAvailable === 1).length)} hint={`共 ${state.dishes.length} 道菜品`} icon={UtensilsCrossed} accent="blue" /></div><div className="mt-7 grid gap-5 lg:grid-cols-[1.25fr_.75fr]"><div className="rounded-3xl border border-[#e1e3db] bg-[#fffefa] p-5 sm:p-7"><div className="flex items-center justify-between"><div><div className="font-bold">最近订单</div><div className="mt-1 text-sm text-[#7d887f]">按创建时间倒序显示</div></div><Button variant="ghost" onClick={() => onGo("orders")} className="text-[#b95439]">查看全部</Button></div><div className="mt-6">{state.orders.length === 0 ? <EmptyState icon={ClipboardList} title="还没有订单" text="顾客通过桌台二维码下单后，订单会出现在这里。" /> : <div className="divide-y divide-[#ecece5]">{state.orders.slice(0, 5).map(order => <div key={order.id} className="flex items-center justify-between gap-4 py-3"><div className="flex min-w-0 items-center gap-3"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#f2f4ed] text-[#587c6d]"><ReceiptIcon /></div><div className="min-w-0"><div className="mono truncate text-sm font-bold">{order.orderNumber}</div><div className="text-xs text-[#7d887f]">{dateTime(order.createdAt)} · {money(order.totalCents)}</div></div></div><StatusBadge status={order.status} /></div>)}</div>}</div></div><div className="rounded-3xl bg-[#1d2926] p-6 text-[#f7f6f1] shadow-xl shadow-[#1d2926]/10"><div className="mono text-[10px] uppercase tracking-[.22em] text-[#a7b6ad]">SETUP CHECKLIST</div><h3 className="mt-3 text-2xl font-bold">把门店接入每一张桌</h3><div className="mt-6 space-y-4"><Checklist done={Boolean(state.restaurant.name)} text="门店资料已创建" /><Checklist done={state.categories.length > 0} text="至少配置一个菜品分类" onClick={() => onGo("menu")} /><Checklist done={state.dishes.length > 0} text="录入并上架菜品" onClick={() => onGo("menu")} /><Checklist done={state.tables.length > 0} text="创建桌台二维码" onClick={() => onGo("tables")} /></div></div></div></>; }
 
-function MenuManager({ state, onRefresh }: { state: AdminState; onRefresh: () => void }) { const [categoryName, setCategoryName] = useState(""); const [dish, setDish] = useState({ categoryId: "", name: "", description: "", price: "", imageUrl: "" }); const createCategory = trpc.admin.createCategory.useMutation({ onSuccess: () => { setCategoryName(""); onRefresh(); toast.success("分类已创建"); }, onError: error => toast.error(error.message) }); const createDish = trpc.admin.createDish.useMutation({ onSuccess: () => { setDish({ categoryId: dish.categoryId, name: "", description: "", price: "", imageUrl: "" }); onRefresh(); toast.success("菜品已创建"); }, onError: error => toast.error(error.message) }); const toggleDish = trpc.admin.setDishAvailability.useMutation({ onSuccess: onRefresh, onError: error => toast.error(error.message) }); return <><PageHeading eyebrow="MENU CATALOG" title="菜单管理" description="维护分类、菜名、说明与价格；下单时服务端会重新校验菜品状态。" /><div className="grid gap-5 xl:grid-cols-[.75fr_1.25fr]"><div className="space-y-5"><Panel title="新建分类" subtitle="例如：招牌菜、主食、饮品"><form onSubmit={event => { event.preventDefault(); if (categoryName.trim()) createCategory.mutate({ name: categoryName.trim(), sortOrder: state.categories.length }); }} className="flex gap-2"><Input value={categoryName} onChange={event => setCategoryName(event.target.value)} placeholder="分类名称" maxLength={80} /><Button type="submit" disabled={createCategory.isPending} className="shrink-0 bg-[#1d2926] text-white hover:bg-[#304640]"><Plus className="mr-1 h-4 w-4" />添加</Button></form></Panel><Panel title="新建菜品" subtitle="所有价格按人民币元填写"><form onSubmit={event => { event.preventDefault(); const cents = Math.round(Number(dish.price) * 100); if (!dish.categoryId || !dish.name.trim() || !Number.isFinite(cents) || cents <= 0) { toast.error("请完整填写分类、菜名和有效价格"); return; } createDish.mutate({ categoryId: Number(dish.categoryId), name: dish.name.trim(), description: dish.description, priceCents: cents, imageUrl: dish.imageUrl || undefined }); }} className="space-y-4"><Field label="所属分类" required><select value={dish.categoryId} onChange={event => setDish({ ...dish, categoryId: event.target.value })} className="h-10 w-full rounded-md border border-[#d7d8cf] bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#d66a4b]/30"><option value="">请选择分类</option>{state.categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field><Field label="菜品名称" required><Input value={dish.name} onChange={event => setDish({ ...dish, name: event.target.value })} placeholder="例如：砂锅鸡汤" maxLength={120} /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="价格（元）" required><Input type="number" min="0.01" step="0.01" value={dish.price} onChange={event => setDish({ ...dish, price: event.target.value })} placeholder="38.00" /></Field><Field label="图片地址"><Input type="url" value={dish.imageUrl} onChange={event => setDish({ ...dish, imageUrl: event.target.value })} placeholder="https://..." /></Field></div><Field label="菜品说明"><Textarea value={dish.description} onChange={event => setDish({ ...dish, description: event.target.value })} placeholder="口味、份量或过敏原说明" className="min-h-20 resize-none" maxLength={1000} /></Field><Button type="submit" disabled={createDish.isPending} className="w-full bg-[#d66a4b] text-white hover:bg-[#bf573b]">{createDish.isPending ? "保存中…" : "保存菜品"}</Button></form></Panel></div><Panel title="已配置菜单" subtitle={`${state.categories.length} 个分类 · ${state.dishes.length} 道菜品`}><div className="space-y-7">{state.categories.length === 0 ? <EmptyState icon={MenuIcon} title="还没有分类" text="先在左侧创建第一个分类，再录入真实菜品。" /> : state.categories.map(category => <div key={category.id}><div className="flex items-center justify-between border-b border-[#ecece5] pb-2"><h3 className="font-bold">{category.name}</h3><span className="text-xs text-[#8b968e]">{state.dishes.filter(dish => dish.categoryId === category.id).length} 道</span></div><div className="divide-y divide-[#f0f0e9]">{state.dishes.filter(dish => dish.categoryId === category.id).map(item => <div key={item.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><div className={`font-semibold ${item.isAvailable === 0 ? "text-[#a4aca5] line-through" : ""}`}>{item.name}</div><div className="mt-1 truncate text-xs text-[#7d887f]">{item.description || "未填写说明"}</div></div><div className="flex shrink-0 items-center gap-3"><span className="font-bold text-[#b95439]">{money(item.priceCents)}</span><button onClick={() => toggleDish.mutate({ dishId: item.id, isAvailable: item.isAvailable === 0 })} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${item.isAvailable === 1 ? "bg-[#e4f0e9] text-[#39705d]" : "bg-[#f0f1eb] text-[#7b867e]"}`}>{item.isAvailable === 1 ? "已上架" : "已下架"}</button></div></div>)}</div></div>)}</div></Panel></div></>; }
+function MenuManager({ state, onRefresh }: { state: AdminState; onRefresh: () => void }) {
+  const [categoryName, setCategoryName] = useState("");
+  const [dish, setDish] = useState({ categoryId: "", name: "", description: "", price: "", imageUrl: "" });
+  const [specGroups, setSpecGroups] = useState<SpecDraft[]>([]);
+  const createCategory = trpc.admin.createCategory.useMutation({ onSuccess: () => { setCategoryName(""); onRefresh(); toast.success("分类已创建"); }, onError: error => toast.error(error.message) });
+  const createDish = trpc.admin.createDish.useMutation({ onSuccess: () => { setDish({ categoryId: dish.categoryId, name: "", description: "", price: "", imageUrl: "" }); setSpecGroups([]); onRefresh(); toast.success("菜品已创建"); }, onError: error => toast.error(error.message) });
+  const uploadImage = trpc.admin.uploadDishImage.useMutation({ onSuccess: result => { setDish(current => ({ ...current, imageUrl: result.url })); toast.success("图片上传成功"); }, onError: error => toast.error(error.message) });
+  const toggleDish = trpc.admin.setDishAvailability.useMutation({ onSuccess: onRefresh, onError: error => toast.error(error.message) });
+
+  const addSpecGroup = () => setSpecGroups(groups => [...groups, { name: "", options: [{ name: "", price: "0" }] }]);
+  const updateSpecGroup = (groupIndex: number, patch: Partial<SpecDraft>) => setSpecGroups(groups => groups.map((group, index) => index === groupIndex ? { ...group, ...patch } : group));
+  const removeSpecGroup = (groupIndex: number) => setSpecGroups(groups => groups.filter((_, index) => index !== groupIndex));
+  const updateSpecOption = (groupIndex: number, optionIndex: number, patch: Partial<{ name: string; price: string }>) => setSpecGroups(groups => groups.map((group, index) => index === groupIndex ? { ...group, options: group.options.map((option, currentIndex) => currentIndex === optionIndex ? { ...option, ...patch } : option) } : group));
+  const removeSpecOption = (groupIndex: number, optionIndex: number) => setSpecGroups(groups => groups.map((group, index) => index === groupIndex ? { ...group, options: group.options.filter((_, currentIndex) => currentIndex !== optionIndex) } : group));
+
+  const handleImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast.error("图片大小需在 5MB 以内"); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (dataUrl) uploadImage.mutate({ fileName: file.name, dataUrl });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const submitDish = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const cents = Math.round(Number(dish.price) * 100);
+    if (!dish.categoryId || !dish.name.trim() || !Number.isFinite(cents) || cents <= 0) { toast.error("请完整填写分类、菜名和有效价格"); return; }
+    const normalizedGroups = specGroups.filter(group => group.name.trim()).map(group => ({
+      name: group.name.trim(),
+      options: group.options.filter(option => option.name.trim()).map(option => ({ name: option.name.trim(), priceDeltaCents: Math.round(Number(option.price || 0) * 100) })),
+    }));
+    if (normalizedGroups.some(group => group.options.length === 0 || group.options.some(option => !Number.isFinite(option.priceDeltaCents) || option.priceDeltaCents < 0))) { toast.error("请完整填写规格选项和有效加价"); return; }
+    createDish.mutate({ categoryId: Number(dish.categoryId), name: dish.name.trim(), description: dish.description, priceCents: cents, imageUrl: dish.imageUrl || undefined, specifications: normalizedGroups.length ? JSON.stringify(normalizedGroups) : undefined });
+  };
+
+  return <><PageHeading eyebrow="MENU CATALOG" title="菜单管理" description="维护真实分类、菜名、价格、图片和规格；下单时服务端会重新校验菜品与规格价格。" /><div className="grid gap-5 xl:grid-cols-[.8fr_1.2fr]"><div className="space-y-5"><Panel title="新建分类" subtitle="例如：招牌菜、主食、饮品"><form onSubmit={event => { event.preventDefault(); if (categoryName.trim()) createCategory.mutate({ name: categoryName.trim(), sortOrder: state.categories.length }); }} className="flex gap-2"><Input value={categoryName} onChange={event => setCategoryName(event.target.value)} placeholder="分类名称" maxLength={80} /><Button type="submit" disabled={createCategory.isPending} className="shrink-0 bg-[#1d2926] text-white hover:bg-[#304640]"><Plus className="mr-1 h-4 w-4" />添加</Button></form></Panel><Panel title="新建菜品" subtitle="价格按人民币元填写，图片会上传到对象存储"><form onSubmit={submitDish} className="space-y-4"><Field label="所属分类" required><select value={dish.categoryId} onChange={event => setDish({ ...dish, categoryId: event.target.value })} className="h-10 w-full rounded-md border border-[#d7d8cf] bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#d66a4b]/30"><option value="">请选择分类</option>{state.categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field><Field label="菜品名称" required><Input value={dish.name} onChange={event => setDish({ ...dish, name: event.target.value })} placeholder="例如：砂锅鸡汤" maxLength={120} /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="价格（元）" required><Input type="number" min="0.01" step="0.01" value={dish.price} onChange={event => setDish({ ...dish, price: event.target.value })} placeholder="38.00" /></Field><Field label="菜品图片"><Input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleImageChange} disabled={uploadImage.isPending} className="h-10 cursor-pointer bg-white pt-2 text-xs" />{uploadImage.isPending && <p className="mt-1 text-xs text-[#b95439]">图片上传中…</p>}</Field></div>{dish.imageUrl && <div className="flex items-center gap-3 rounded-xl border border-[#e4e5dd] bg-white p-2"><img src={dish.imageUrl} alt="菜品预览" className="h-16 w-16 rounded-lg object-cover" /><span className="text-xs text-[#39705d]">已上传，可直接保存菜品</span></div>}<Field label="菜品说明"><Textarea value={dish.description} onChange={event => setDish({ ...dish, description: event.target.value })} placeholder="口味、份量或过敏原说明" className="min-h-20 resize-none" maxLength={1000} /></Field><div className="rounded-2xl border border-[#e1e3db] bg-[#faf9f4] p-4"><div className="flex items-center justify-between"><div><div className="text-sm font-bold">规格选项</div><div className="mt-1 text-xs text-[#7d887f]">例如：辣度、份量、加料；可设置每个选项加价</div></div><Button type="button" variant="outline" onClick={addSpecGroup} className="border-[#d7d8cf] bg-white text-xs"><Plus className="mr-1 h-3.5 w-3.5" />添加规格组</Button></div>{specGroups.length === 0 ? <p className="mt-4 text-xs text-[#9aa39b]">暂无规格，顾客将直接按基础价格下单。</p> : <div className="mt-4 space-y-4">{specGroups.map((group, groupIndex) => <div key={groupIndex} className="rounded-xl border border-[#e4e5dd] bg-white p-3"><div className="flex gap-2"><Input value={group.name} onChange={event => updateSpecGroup(groupIndex, { name: event.target.value })} placeholder="规格组名称，例如：辣度" className="h-9 text-sm" /><Button type="button" variant="ghost" onClick={() => removeSpecGroup(groupIndex)} className="h-9 px-2 text-[#a64b43]">删除</Button></div><div className="mt-2 space-y-2">{group.options.map((option, optionIndex) => <div key={optionIndex} className="flex gap-2"><Input value={option.name} onChange={event => updateSpecOption(groupIndex, optionIndex, { name: event.target.value })} placeholder="选项，例如：微辣" className="h-9 text-sm" /><Input type="number" min="0" step="0.01" value={option.price} onChange={event => updateSpecOption(groupIndex, optionIndex, { price: event.target.value })} placeholder="加价元" className="h-9 w-28 text-sm" /><Button type="button" variant="ghost" onClick={() => removeSpecOption(groupIndex, optionIndex)} disabled={group.options.length <= 1} className="h-9 px-2 text-[#a64b43]">×</Button></div>)}<Button type="button" variant="ghost" onClick={() => updateSpecGroup(groupIndex, { options: [...group.options, { name: "", price: "0" }] })} className="h-8 px-1 text-xs text-[#b95439]">+ 添加选项</Button></div></div>)}</div>}</div><Button type="submit" disabled={createDish.isPending || uploadImage.isPending} className="w-full bg-[#d66a4b] text-white hover:bg-[#bf573b]">{createDish.isPending ? "保存中…" : "保存菜品"}</Button></form></Panel></div><Panel title="已配置菜单" subtitle={`${state.categories.length} 个分类 · ${state.dishes.length} 道菜品`}><div className="space-y-7">{state.categories.length === 0 ? <EmptyState icon={MenuIcon} title="还没有分类" text="先在左侧创建第一个分类，再录入真实菜品。" /> : state.categories.map(category => <div key={category.id}><div className="flex items-center justify-between border-b border-[#ecece5] pb-2"><h3 className="font-bold">{category.name}</h3><span className="text-xs text-[#8b968e]">{state.dishes.filter(item => item.categoryId === category.id).length} 道</span></div><div className="divide-y divide-[#f0f0e9]">{state.dishes.filter(item => item.categoryId === category.id).map(item => <div key={item.id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3">{item.imageUrl ? <img src={item.imageUrl} alt="" className="h-10 w-10 shrink-0 rounded-lg object-cover" /> : <div className="h-10 w-10 shrink-0 rounded-lg bg-[#f2e9df]" />}<div className="min-w-0"><div className={`font-semibold ${item.isAvailable === 0 ? "text-[#a4aca5] line-through" : ""}`}>{item.name}</div><div className="mt-1 truncate text-xs text-[#7d887f]">{item.description || "未填写说明"}{item.specifications ? " · 含规格" : ""}</div></div></div><div className="flex shrink-0 items-center gap-3"><span className="font-bold text-[#b95439]">{money(item.priceCents)}</span><button onClick={() => toggleDish.mutate({ dishId: item.id, isAvailable: item.isAvailable === 0 })} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${item.isAvailable === 1 ? "bg-[#e4f0e9] text-[#39705d]" : "bg-[#f0f1eb] text-[#7b867e]"}`}>{item.isAvailable === 1 ? "已上架" : "已下架"}</button></div></div>)}</div></div>)}</div></Panel></div></>;
+}
 
 function TableManager({ state, onRefresh }: { state: AdminState; onRefresh: () => void }) {
   const [form, setForm] = useState({ name: "", code: "" });
@@ -163,7 +263,7 @@ function OrderManager({ state, onRefresh }: { state: AdminState; onRefresh: () =
     const map = new Map<number, string[]>();
     for (const item of state.orderItems) {
       const list = map.get(item.orderId) ?? [];
-      list.push(`${item.dishName} × ${item.quantity}`);
+      list.push(`${item.dishName} × ${item.quantity}${item.note ? ` · ${item.note}` : ""}`);
       map.set(item.orderId, list);
     }
     return map;
@@ -174,7 +274,19 @@ function OrderManager({ state, onRefresh }: { state: AdminState; onRefresh: () =
   return <><PageHeading eyebrow="ORDER QUEUE" title="订单处理" description="订单状态由门店推进；支付状态独立记录，确认收款后可在这里标记为已支付。" /><div className="rounded-3xl border border-[#e1e3db] bg-[#fffefa] shadow-sm"><div className="flex items-center justify-between border-b border-[#ecece5] px-5 py-5 sm:px-7"><div><div className="font-bold">全部订单</div><div className="mt-1 text-sm text-[#7d887f]">最近 100 笔订单</div></div><Badge className="bg-[#fbe8dc] text-[#a54e36]">{state.orders.length} 笔</Badge></div>{state.orders.length === 0 ? <div className="p-10"><EmptyState icon={ClipboardList} title="还没有真实订单" text="顾客扫码下单后，订单会实时出现在这里。" /></div> : <div className="divide-y divide-[#ecece5]">{state.orders.map(order => <div key={order.id} className="grid gap-4 px-5 py-5 sm:grid-cols-[1fr_auto] sm:px-7"><div><div className="flex flex-wrap items-center gap-2"><span className="mono font-bold">{order.orderNumber}</span><StatusBadge status={order.status} /><span className="text-xs text-[#8b968e]">{dateTime(order.createdAt)}</span></div><div className="mt-3 flex flex-wrap gap-2 text-sm text-[#55645c]">{(itemMap.get(order.id) ?? []).map(item => <span key={item} className="rounded-lg bg-[#f1f3ed] px-2.5 py-1">{item}</span>)}</div>{order.customerNote && <div className="mt-3 rounded-xl bg-[#fff5e9] px-3 py-2 text-sm text-[#8b6338]">顾客备注：{order.customerNote}</div>}<div className="mt-3 font-bold text-[#b95439]">合计 {money(order.totalCents)} <span className="ml-2 text-xs font-normal text-[#8b968e]">· {order.paymentMethod === "wechat" ? "微信支付" : "到店支付"}</span></div></div><div className="flex flex-wrap items-center gap-2 sm:self-center"><select value={order.status} onChange={event => update.mutate({ orderId: order.id, status: event.target.value as typeof nextStatuses[number] })} className="h-10 min-w-28 rounded-lg border border-[#d7d8cf] bg-white px-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#d66a4b]/30" aria-label={`${order.orderNumber}订单状态`}>{nextStatuses.map(status => <option key={status} value={status}>{orderStatus[status].label}</option>)}</select><select value={order.paymentStatus} onChange={event => updatePayment.mutate({ orderId: order.id, paymentStatus: event.target.value as typeof paymentStatuses[number] })} className="h-10 min-w-28 rounded-lg border border-[#ead5c8] bg-[#fff8f3] px-3 text-sm font-semibold text-[#9d6420] outline-none focus:ring-2 focus:ring-[#d66a4b]/30" aria-label={`${order.orderNumber}支付状态`}>{paymentStatuses.map(status => <option key={status} value={status}>{paymentLabels[status]}</option>)}</select></div></div>)}</div>}</div></>;
 }
 
-function SettingsManager({ state, onSaved }: { state: AdminState; onSaved: () => void }) { const [form, setForm] = useState({ name: state.restaurant.name, slogan: state.restaurant.slogan || "", address: state.restaurant.address || "", phone: state.restaurant.phone || "" }); const update = trpc.admin.updateRestaurant.useMutation({ onSuccess: () => { onSaved(); toast.success("门店设置已保存"); }, onError: error => toast.error(error.message) }); return <><PageHeading eyebrow="STORE PROFILE" title="门店设置" description="这些信息会显示在顾客菜单顶部，修改后立即生效。" /><div className="max-w-2xl"><Panel title="门店资料" subtitle="不影响已有订单和桌台二维码"><form onSubmit={event => { event.preventDefault(); update.mutate(form); }} className="space-y-5"><Field label="门店名称" required><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} maxLength={120} required /></Field><Field label="一句话介绍"><Input value={form.slogan} onChange={event => setForm({ ...form, slogan: event.target.value })} maxLength={240} /></Field><Field label="门店电话"><Input value={form.phone} onChange={event => setForm({ ...form, phone: event.target.value })} maxLength={40} /></Field><Field label="门店地址"><Input value={form.address} onChange={event => setForm({ ...form, address: event.target.value })} maxLength={240} /></Field><Button type="submit" disabled={update.isPending} className="bg-[#d66a4b] text-white hover:bg-[#bf573b]">{update.isPending ? "保存中…" : "保存设置"}</Button></form></Panel></div></>; }
+function SettingsManager({ state, onSaved }: { state: AdminState; onSaved: () => void }) {
+  const [form, setForm] = useState({ name: state.restaurant.name, slogan: state.restaurant.slogan || "", address: state.restaurant.address || "", phone: state.restaurant.phone || "" });
+  const [codeForm, setCodeForm] = useState({ currentCode: "", newCode: "", confirmCode: "" });
+  const update = trpc.admin.updateRestaurant.useMutation({ onSuccess: () => { onSaved(); toast.success("门店设置已保存"); }, onError: error => toast.error(error.message) });
+  const changeCode = trpc.admin.changeMerchantLoginCode.useMutation({ onSuccess: () => { setCodeForm({ currentCode: "", newCode: "", confirmCode: "" }); toast.success("登录码已修改，请使用新代码登录"); }, onError: error => toast.error(error.message) });
+  const submitCode = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (codeForm.currentCode.length !== 8 || codeForm.newCode.length !== 8) { toast.error("登录码必须是 8 位数字"); return; }
+    if (codeForm.newCode !== codeForm.confirmCode) { toast.error("两次输入的新登录码不一致"); return; }
+    changeCode.mutate({ currentCode: codeForm.currentCode, newCode: codeForm.newCode });
+  };
+  return <><PageHeading eyebrow="STORE PROFILE" title="门店设置" description="这些信息会显示在顾客菜单顶部，修改后立即生效。" /><div className="grid max-w-3xl gap-5"><Panel title="门店资料" subtitle="不影响已有订单和桌台二维码"><form onSubmit={event => { event.preventDefault(); update.mutate(form); }} className="space-y-5"><Field label="门店名称" required><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} maxLength={120} required /></Field><Field label="一句话介绍"><Input value={form.slogan} onChange={event => setForm({ ...form, slogan: event.target.value })} maxLength={240} /></Field><Field label="门店电话"><Input value={form.phone} onChange={event => setForm({ ...form, phone: event.target.value })} maxLength={40} /></Field><Field label="门店地址"><Input value={form.address} onChange={event => setForm({ ...form, address: event.target.value })} maxLength={240} /></Field><Button type="submit" disabled={update.isPending} className="bg-[#d66a4b] text-white hover:bg-[#bf573b]">{update.isPending ? "保存中…" : "保存设置"}</Button></form></Panel><Panel title="修改商家登录码" subtitle="需要验证原登录码；新代码必须是 8 位数字。连续输错 5 次会锁定 15 分钟。"><form onSubmit={submitCode} className="grid gap-4 sm:grid-cols-3"><Field label="原登录码" required><Input type="password" inputMode="numeric" maxLength={8} value={codeForm.currentCode} onChange={event => setCodeForm({ ...codeForm, currentCode: event.target.value.replace(/\D/g, "").slice(0, 8) })} placeholder="8 位数字" required /></Field><Field label="新登录码" required><Input type="password" inputMode="numeric" maxLength={8} value={codeForm.newCode} onChange={event => setCodeForm({ ...codeForm, newCode: event.target.value.replace(/\D/g, "").slice(0, 8) })} placeholder="8 位数字" required /></Field><Field label="确认新登录码" required><Input type="password" inputMode="numeric" maxLength={8} value={codeForm.confirmCode} onChange={event => setCodeForm({ ...codeForm, confirmCode: event.target.value.replace(/\D/g, "").slice(0, 8) })} placeholder="再次输入" required /></Field><Button type="submit" disabled={changeCode.isPending} className="bg-[#1d2926] text-white hover:bg-[#304640] sm:col-span-3">{changeCode.isPending ? "验证并保存中…" : "验证原码并修改"}</Button></form></Panel></div></>;
+}
 
 type AdminState = NonNullable<BackendAdminState>;
 function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between"><div><div className="mono text-[10px] uppercase tracking-[.24em] text-[#d66a4b]">{eyebrow}</div><h2 className="mt-2 text-3xl font-extrabold tracking-tight">{title}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-[#738078]">{description}</p></div>{action}</div>; }
