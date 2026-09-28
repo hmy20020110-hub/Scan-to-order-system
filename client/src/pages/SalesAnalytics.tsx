@@ -105,9 +105,9 @@ export default function SalesAnalytics() {
                   <AreaChart data={data.daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                     <defs><linearGradient id="salesFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#d66a4b" stopOpacity={0.28} /><stop offset="95%" stopColor="#d66a4b" stopOpacity={0} /></linearGradient></defs>
                     <CartesianGrid stroke="#ecece5" vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#89948d" }} tickFormatter={value => value.slice(5)} minTickGap={26} />
-                    <YAxis tick={{ fontSize: 11, fill: "#89948d" }} tickFormatter={value => `¥${(value / 100).toFixed(0)}`} width={48} />
-                    <Tooltip formatter={(value: number) => [money(value), "销售额"]} labelFormatter={label => `日期 ${label}`} />
+                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#89948d" }} tickFormatter={value => String(value).slice(5)} minTickGap={26} />
+                    <YAxis tick={{ fontSize: 11, fill: "#89948d" }} tickFormatter={value => `¥${(Number(value) / 100).toFixed(0)}`} width={48} />
+                    <Tooltip formatter={value => [money(Number(value ?? 0)), "销售额"]} labelFormatter={label => `日期 ${label}`} />
                     <Area type="monotone" dataKey="revenueCents" stroke="#d66a4b" strokeWidth={2.5} fill="url(#salesFill)" />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -120,7 +120,7 @@ export default function SalesAnalytics() {
                     <Pie data={data.paymentMethods} dataKey="revenueCents" nameKey="method" innerRadius={58} outerRadius={92} paddingAngle={4}>
                       {data.paymentMethods.map((entry, index) => <Cell key={entry.method} fill={palette[index % palette.length]} />)}
                     </Pie>
-                    <Tooltip formatter={(value: number) => [money(value), "销售额"]} />
+                    <Tooltip formatter={value => [money(Number(value ?? 0)), "销售额"]} />
                     <Legend verticalAlign="bottom" height={30} />
                   </PieChart>
                 </ResponsiveContainer>
@@ -134,9 +134,9 @@ export default function SalesAnalytics() {
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={data.daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke="#ecece5" vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#89948d" }} tickFormatter={value => value.slice(5)} minTickGap={26} />
+                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#89948d" }} tickFormatter={value => String(value).slice(5)} minTickGap={26} />
                     <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#89948d" }} width={28} />
-                    <Tooltip formatter={(value: number) => [value, "订单数"]} />
+                    <Tooltip formatter={value => [Number(value ?? 0), "订单数"]} />
                     <Bar dataKey="orders" fill="#4f8371" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>

@@ -21,7 +21,7 @@
 
 ## 测试签名
 
-本地模拟支付和微信适配器测试契约使用同一个明确的签名输入顺序：
+微信支付适配器使用明确的签名输入顺序；测试只验证业务契约，不启动或依赖任何模拟支付进程：
 
 ```text
 provider\norderNumber\ntransactionId\namountCents\nstatus\ntimestamp\nnonce
@@ -48,8 +48,7 @@ pnpm test -- server/payment-callbacks.test.ts
 
 测试覆盖：
 
-- mock 回调成功。
-- wechat 回调成功。
+- 微信回调成功。
 - 修改金额后签名失败。
 - 回调过期。
 - 错误 provider。
@@ -68,10 +67,9 @@ pnpm test -- server/payment-callbacks.test.ts
 
 ## REST 回调接口
 
-支付平台或本地模拟器可直接调用：
+微信支付平台适配器可直接调用：
 
 ```text
-POST /api/payment-callbacks/mock
 POST /api/payment-callbacks/wechat
 Header: x-payment-signature: <64-character-hex-signature>
 Body: <统一 payload JSON>
@@ -89,7 +87,7 @@ POST /api/trpc/payment.callback
 
 ```json
 {
-  "provider": "mock",
+  "provider": "wechat",
   "signature": "<64-character-hex-signature>",
   "payload": {
     "orderNumber": "TABC1234",
@@ -102,11 +100,11 @@ POST /api/trpc/payment.callback
 }
 ```
 
-本地模拟回调使用 `MOCK_PAYMENT_CALLBACK_SECRET`。生产环境禁止保留默认模拟密钥；模拟回调接口也不应暴露给公网。
+回调使用商家配置的 `WECHAT_PAYMENT_CALLBACK_SECRET`。如果该配置为空，系统返回配置缺失错误并拒绝处理；系统不会自动生成默认密钥，也不会切换到模拟支付。
 
 ## 微信支付适配边界
 
-微信支付官方通知通常需要 API v3 平台证书验签和 AES-GCM 解密。本项目的 `wechat` provider 当前是**适配器测试契约**，方便先验证订单金额、时效、幂等和状态流转，不等同于官方通知解密实现。
+微信支付官方通知通常需要 API v3 平台证书验签和 AES-GCM 解密。本项目的 `wechat` provider 已具备统一回调业务契约，用于验证订单金额、时效、幂等和状态流转；接入官方通知解密前不能把 HMAC 测试签名当作微信官方验签。
 
 正式上线步骤：
 
@@ -114,6 +112,6 @@ POST /api/trpc/payment.callback
 2. 将官方通知转换为本项目的统一 payload。
 3. 通过 `validatePaymentCallback` 之后再调用 `applyPaymentCallback`，或在适配器内部复用相同业务事务。
 4. 配置 HTTPS 通知地址、平台证书更新、超时重试和退款通知。
-5. 用测试商户验证成功、失败、金额不一致、重复通知、退款和订单不存在等场景。
+5. 用测试商户验证成功、失败、金额不一致、重复通知、退款和订单不存在等场景；本地单元测试不会伪造线上支付进程。
 
 任何支付成功页面只能作为用户体验提示，最终支付状态以服务端已验证的回调或主动查询结果为准。

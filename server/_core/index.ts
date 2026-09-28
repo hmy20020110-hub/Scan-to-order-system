@@ -9,6 +9,20 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { ENV } from "./env";
+
+function assertProductionConfig() {
+  if (!ENV.isProduction) return;
+  const missing = [
+    ["DATABASE_URL", ENV.databaseUrl],
+    ["JWT_SECRET", ENV.cookieSecret],
+    ["OWNER_OPEN_ID", ENV.ownerOpenId],
+  ].filter(([, value]) => !value).map(([name]) => name);
+  if (ENV.cookieSecret.length < 32) missing.push("JWT_SECRET(至少32字符)");
+  if (missing.length > 0) {
+    throw new Error(`生产配置不完整，请填写：${missing.join("、")}`);
+  }
+}
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -30,16 +44,17 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  assertProductionConfig();
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Keep unauthenticated request parsing bounded; 7MB base64 images fit within 8MB.
+  app.use(express.json({ limit: "8mb" }));
+  app.use(express.urlencoded({ limit: "1mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   app.post("/api/payment-callbacks/:provider", async (req, res) => {
     const provider = req.params.provider;
-    if (provider !== "wechat" && provider !== "mock") {
+    if (provider !== "wechat") {
       res.status(404).json({ success: false, message: "支付渠道不存在" });
       return;
     }

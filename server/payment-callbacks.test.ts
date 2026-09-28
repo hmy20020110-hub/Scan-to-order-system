@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createPaymentSignature,
+  paymentProviderSchema,
   resolveOrderPaymentStatus,
   validatePaymentCallback,
 } from "./payment-callbacks";
@@ -24,15 +25,15 @@ describe("payment callback contract", () => {
     expect(resolveOrderPaymentStatus("refunded", "paid")).toBe("refunded");
   });
 
-  it.each(["mock", "wechat"] as const)("accepts a signed %s callback", provider => {
-    const signature = createPaymentSignature(provider, payload, secret);
-    expect(validatePaymentCallback({ provider, payload, signature, secret, nowMs })).toEqual(payload);
+  it("accepts a signed merchant-configured WeChat callback", () => {
+    const signature = createPaymentSignature("wechat", payload, secret);
+    expect(validatePaymentCallback({ provider: "wechat", payload, signature, secret, nowMs })).toEqual(payload);
   });
 
   it("rejects a changed amount or signature", () => {
-    const signature = createPaymentSignature("mock", payload, secret);
+    const signature = createPaymentSignature("wechat", payload, secret);
     expect(() => validatePaymentCallback({
-      provider: "mock",
+      provider: "wechat",
       payload: { ...payload, amountCents: 1 },
       signature,
       secret,
@@ -40,7 +41,7 @@ describe("payment callback contract", () => {
     })).toThrow("PAYMENT_CALLBACK_SIGNATURE_INVALID");
   });
 
-  it("rejects expired callbacks and wrong providers", () => {
+  it("rejects expired callbacks and unsupported providers", () => {
     const signature = createPaymentSignature("wechat", payload, secret);
     expect(() => validatePaymentCallback({
       provider: "wechat",
@@ -49,12 +50,6 @@ describe("payment callback contract", () => {
       secret,
       nowMs: nowMs + 5 * 60 * 1000 + 1,
     })).toThrow("PAYMENT_CALLBACK_EXPIRED");
-    expect(() => validatePaymentCallback({
-      provider: "mock",
-      payload,
-      signature,
-      secret,
-      nowMs,
-    })).toThrow("PAYMENT_CALLBACK_SIGNATURE_INVALID");
+    expect(() => paymentProviderSchema.parse("mock")).toThrow();
   });
 });

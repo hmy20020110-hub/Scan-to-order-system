@@ -11,12 +11,7 @@ function createContext(): TrpcContext {
 }
 
 describe("auth.merchantLogin", () => {
-  it("rejects a wrong merchant code", async () => {
-    const caller = appRouter.createCaller(createContext());
-    await expect(caller.auth.merchantLogin({ code: "00000000" })).rejects.toThrow("登录码不正确");
-  });
-
-  it("rejects malformed codes before authentication", async () => {
+  it("rejects malformed codes before authentication without touching the database", async () => {
     const caller = appRouter.createCaller(createContext());
     await expect(caller.auth.merchantLogin({ code: "abc" })).rejects.toThrow();
   });

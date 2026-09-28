@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
-export const paymentProviderSchema = z.enum(["wechat", "mock"]);
+export const paymentProviderSchema = z.enum(["wechat"]);
 export const paymentCallbackPayloadSchema = z.object({
   orderNumber: z.string().trim().min(1).max(32),
   transactionId: z.string().trim().min(1).max(128),
@@ -36,7 +36,7 @@ function signingMessage(provider: PaymentProvider, payload: PaymentCallbackPaylo
   ].join("\n");
 }
 
-/** Testable signature contract shared by the mock provider and the WeChat adapter test harness. */
+/** Testable signature contract for the configured WeChat adapter. */
 export function createPaymentSignature(
   provider: PaymentProvider,
   payload: PaymentCallbackPayload,

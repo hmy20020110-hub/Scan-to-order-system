@@ -114,7 +114,7 @@ export const paymentTransactions = mysqlTable(
   "paymentTransactions",
   {
     id: int("id").autoincrement().primaryKey(),
-    provider: mysqlEnum("provider", ["wechat", "mock"]).notNull(),
+    provider: mysqlEnum("provider", ["wechat"]).notNull(),
     orderId: int("orderId").notNull(),
     orderNumber: varchar("orderNumber", { length: 32 }).notNull(),
     transactionId: varchar("transactionId", { length: 128 }).notNull(),

@@ -8,7 +8,7 @@
 
 - 顾客端：桌台二维码菜单、分类浏览、购物车、规格选择、订单确认和到店支付流程。
 - 商家端：数字登录码、登录失败锁定、门店设置、菜品图片上传、规格组和价格加价、桌台二维码、订单处理。
-- 支付：到店支付和微信支付状态模型；提供模拟支付与微信适配器的签名回调测试契约、订单金额校验、回调时效校验、重复回调幂等处理和支付流水审计。
+- 支付：到店支付和商家配置后的微信支付状态模型；运行时不启用任何模拟支付，回调包含订单金额校验、时效校验、重复回调幂等处理和支付流水审计。
 - 销售分析：7/30/90 天销售额趋势、订单量、客单价、已支付销售额、支付方式分布和热销菜品；页面每 30 秒刷新。
 - 安全：Manus OAuth 用户体系、管理员权限过程、商家登录码哈希、5 次失败锁定 15 分钟、服务端价格重新计算和支付金额校验。
 
@@ -17,7 +17,7 @@
 | 层 | 技术 |
 | --- | --- |
 | 顾客端 / 商家端 | React 19、Vite、Tailwind CSS 4、shadcn/ui、Recharts |
-| API | tRPC 11、Express 4、Zod |
+| API | tRPC 11、Express 5、Zod |
 | 数据库 | MySQL / TiDB、Drizzle ORM、迁移 SQL |
 | 文件 | Manus Storage / S3-compatible storage |
 | 认证 | Manus OAuth + 商家数字登录码会话 |
@@ -47,6 +47,7 @@ drizzle/
 docs/
   DEPLOYMENT.md                  部署和上线检查清单
   PAYMENT-CALLBACKS.md           支付回调测试契约和联调说明
+  SECURITY-AUDIT.md              安全审计、修复和真实流程验收记录
   github-research.md             开源方案调研记录
 shared/                           前后端共享常量和校验
 ```
@@ -64,8 +65,7 @@ shared/                           前后端共享常量和校验
 
 ```bash
 pnpm install
-cp .env.example .env
-# 编辑 .env，至少配置数据库、JWT 和管理员身份信息
+# 在部署目录创建 .env，并按下表填写门店自己的配置
 ```
 
 主要环境变量：
@@ -79,7 +79,6 @@ cp .env.example .env
 | `OWNER_OPEN_ID` | 是 | 门店管理员对应的 Manus openId |
 | `MERCHANT_LOGIN_CODE` | 首次登录 | 初始 8 位数字登录码，首次成功登录后会写入哈希 |
 | `WECHAT_PAYMENT_CALLBACK_SECRET` | 微信支付上线时 | 微信适配器回调签名密钥；不要提交到 Git |
-| `MOCK_PAYMENT_CALLBACK_SECRET` | 本地模拟支付 | 本地联调回调密钥；生产环境必须显式替换默认值 |
 | `BUILT_IN_FORGE_API_URL` | 使用平台存储时 | Manus 内置 API 地址 |
 | `BUILT_IN_FORGE_API_KEY` | 使用平台存储时 | 服务端存储 API 密钥 |
 
@@ -125,7 +124,6 @@ pnpm start
 支付平台推荐调用的 REST 回调入口：
 
 ```text
-POST /api/payment-callbacks/mock
 POST /api/payment-callbacks/wechat
 Header: x-payment-signature: <64-character-hex-signature>
 Body: <统一 payload JSON>
@@ -137,7 +135,7 @@ Body: <统一 payload JSON>
 POST /api/trpc/payment.callback
 ```
 
-输入包含 `provider`（`mock` 或 `wechat`）、`signature` 和 `payload`。完整 payload 示例、签名方式和 Vitest 测试说明见 [`docs/PAYMENT-CALLBACKS.md`](docs/PAYMENT-CALLBACKS.md)。
+输入包含 `provider=wechat`、`signature` 和 `payload`。完整 payload 示例、商家配置方式和 Vitest 测试说明见 [`docs/PAYMENT-CALLBACKS.md`](docs/PAYMENT-CALLBACKS.md)。
 
 > 当前代码提供微信支付适配器的**回调契约和测试逻辑**，不是直接替代微信支付官方 API v3 的 RSA 签名验证与 AES-GCM 解密。正式接入微信支付商户号前，应在适配器层接入官方 SDK/证书、通知解密、平台证书轮换和 HTTPS 回调地址，不应把本地 HMAC 测试密钥直接用于生产。
 
@@ -173,7 +171,7 @@ NODE_ENV=production pnpm start
 - 桌台名称和桌台码校验。
 - 菜品可用性、规格必选、规格加价和订单金额快照。
 - 到店支付和微信支付 API 参数契约。
-- 模拟支付、微信支付回调签名、篡改、过期、错误 provider 和重复回调规则。
+- 微信支付回调签名、篡改、过期、错误 provider 和重复回调规则。
 
 提交前建议执行：
 
@@ -184,7 +182,7 @@ pnpm check && pnpm test && pnpm build && git diff --check
 ## 安全与运营注意事项
 
 - `.env`、数据库备份、OAuth secret、支付密钥和对象存储密钥不得提交到仓库。
-- 生产环境禁止使用默认 `MOCK_PAYMENT_CALLBACK_SECRET`。
+- 微信支付未配置 `WECHAT_PAYMENT_CALLBACK_SECRET` 时，回调接口会拒绝处理，不会降级到模拟支付。
 - 支付回调必须使用 HTTPS、固定回调地址、签名验证和金额二次校验。
 - 支付和订单接口应保留请求日志、错误告警和审计留痕，但日志中不要记录完整支付密钥或敏感个人信息。
 - 上线微信支付前必须补充真实商户号沙箱/生产联调、退款回调、证书轮换和失败重试验证。

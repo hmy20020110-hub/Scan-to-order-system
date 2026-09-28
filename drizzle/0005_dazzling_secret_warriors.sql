@@ -1,0 +1,1 @@
+ALTER TABLE `paymentTransactions` MODIFY COLUMN `provider` enum('wechat') NOT NULL;

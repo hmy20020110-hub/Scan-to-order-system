@@ -69,6 +69,9 @@ export const appRouter = router({
           const seconds = Math.ceil((owner.merchantLoginLockedUntil.getTime() - now.getTime()) / 1000);
           throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `登录已锁定，请 ${seconds} 秒后重试` });
         }
+        if (!owner.merchantCodeHash && !ENV.merchantLoginCode) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "商家初始登录码尚未配置" });
+        }
         const valid = owner.merchantCodeHash
           ? verifyMerchantCode(input.code, owner.merchantCodeHash)
           : input.code === ENV.merchantLoginCode;
@@ -161,15 +164,12 @@ export const appRouter = router({
   }),
 
   payment: router({
-    /** Public callback contract used by the mock provider and the WeChat adapter. */
+    /** Public callback contract for the merchant-configured WeChat adapter. */
     callback: publicProcedure
       .input(paymentCallbackInputSchema)
       .mutation(async ({ input }) => {
-        const secret =
-          input.provider === "wechat"
-            ? ENV.wechatPaymentCallbackSecret
-            : ENV.mockPaymentCallbackSecret;
-        if (!secret || (ENV.isProduction && input.provider === "mock" && secret === "local-mock-payment-secret")) {
+        const secret = ENV.wechatPaymentCallbackSecret;
+        if (!secret) {
           throw new TRPCError({ code: "PRECONDITION_FAILED", message: "支付回调密钥尚未配置" });
         }
         let payload;
@@ -281,6 +281,14 @@ export const appRouter = router({
         const data = Buffer.from(match[2], "base64");
         if (data.length === 0 || data.length > 5 * 1024 * 1024) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "图片大小需在 5MB 以内" });
+        }
+        const hasValidSignature =
+          (contentType === "image/png" && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+          (contentType === "image/jpeg" && data.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) ||
+          (contentType === "image/gif" && (data.subarray(0, 6).toString() === "GIF87a" || data.subarray(0, 6).toString() === "GIF89a")) ||
+          (contentType === "image/webp" && data.subarray(0, 4).toString() === "RIFF" && data.subarray(8, 12).toString() === "WEBP");
+        if (!hasValidSignature) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "图片内容与文件格式不一致" });
         }
         const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80) || "dish-image";
         try {

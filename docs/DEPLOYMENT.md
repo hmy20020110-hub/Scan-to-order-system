@@ -18,7 +18,6 @@ MERCHANT_LOGIN_CODE=<首次登录用的 8 位数字>
 BUILT_IN_FORGE_API_URL=<平台 API 地址>
 BUILT_IN_FORGE_API_KEY=<服务端 API 密钥>
 WECHAT_PAYMENT_CALLBACK_SECRET=<微信适配器使用的回调密钥>
-MOCK_PAYMENT_CALLBACK_SECRET=<非默认模拟支付密钥>
 ```
 
 真实密钥只放在部署平台的 secret manager 或环境变量中，不要写入仓库、README、截图或日志。
@@ -74,7 +73,7 @@ NODE_ENV=production pnpm start
 - 统一下单、支付状态查询、退款和退款回调实现。
 - 官方通知的 RSA 签名校验及 AES-GCM 解密适配器。
 
-在真实商户联调前，不能把本项目的 HMAC 测试密钥当作微信官方签名验证。先运行 `pnpm test -- payment-callbacks.test.ts` 验证业务层，再使用官方沙箱/测试商户完成端到端联调。
+在真实商户联调前，不能把本项目的 HMAC 测试契约当作微信官方签名验证。先运行 `pnpm test -- payment-callbacks.test.ts` 验证业务层，再使用官方沙箱/测试商户完成端到端联调。系统不会在缺少配置时启用模拟支付。
 
 ## 7. 监控与备份
 
