@@ -28,4 +28,36 @@ describe("order payment input", () => {
       items: [{ dishId: 1, quantity: 1 }],
     })).rejects.toThrow();
   });
+
+  it("rejects an invalid mock payment callback signature before touching the database", async () => {
+    const caller = appRouter.createCaller(createPublicContext());
+    await expect(caller.payment.callback({
+      provider: "mock",
+      signature: "0".repeat(64),
+      payload: {
+        orderNumber: "TABC1234",
+        transactionId: "txn-invalid",
+        amountCents: 2680,
+        status: "success",
+        timestamp: Date.now(),
+        nonce: "nonce-12345678",
+      },
+    })).rejects.toThrow("支付回调签名或时效校验失败");
+  });
+
+  it("rejects malformed callback payloads at the API boundary", async () => {
+    const caller = appRouter.createCaller(createPublicContext());
+    await expect(caller.payment.callback({
+      provider: "wechat",
+      signature: "invalid",
+      payload: {
+        orderNumber: "",
+        transactionId: "txn-invalid",
+        amountCents: 0,
+        status: "success",
+        timestamp: Date.now(),
+        nonce: "short",
+      },
+    })).rejects.toThrow();
+  });
 });

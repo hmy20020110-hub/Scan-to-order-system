@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   DiningTable,
@@ -14,10 +14,16 @@ import {
   menuCategories,
   orderItems,
   orders,
+  paymentTransactions,
   restaurants,
   users,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import {
+  resolveOrderPaymentStatus,
+  type PaymentCallbackPayload,
+  type PaymentProvider,
+} from "./payment-callbacks";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -216,6 +222,151 @@ export async function findOrderByNumber(orderNumber: string): Promise<Order | un
   if (!db) return undefined;
   const rows = await db.select().from(orders).where(eq(orders.orderNumber, orderNumber)).limit(1);
   return rows[0];
+}
+
+export async function applyPaymentCallback(params: {
+  provider: PaymentProvider;
+  payload: PaymentCallbackPayload;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+
+  return db.transaction(async tx => {
+    const orderRows = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.orderNumber, params.payload.orderNumber))
+      .limit(1);
+    const order = orderRows[0];
+    if (!order) throw new Error("PAYMENT_ORDER_NOT_FOUND");
+
+    const existingRows = await tx
+      .select()
+      .from(paymentTransactions)
+      .where(
+        and(
+          eq(paymentTransactions.provider, params.provider),
+          eq(paymentTransactions.transactionId, params.payload.transactionId),
+        ),
+      )
+      .limit(1);
+    const existing = existingRows[0];
+    if (existing) {
+      if (existing.orderId !== order.id || existing.amountCents !== params.payload.amountCents) {
+        throw new Error("PAYMENT_TRANSACTION_CONFLICT");
+      }
+      return { status: "duplicate" as const, order };
+    }
+
+    if (order.totalCents !== params.payload.amountCents) {
+      throw new Error("PAYMENT_AMOUNT_MISMATCH");
+    }
+
+    await tx.insert(paymentTransactions).values({
+      provider: params.provider,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      transactionId: params.payload.transactionId,
+      amountCents: params.payload.amountCents,
+      status: params.payload.status,
+      rawPayload: JSON.stringify(params.payload),
+    });
+
+    const nextPaymentStatus = resolveOrderPaymentStatus(params.payload.status, order.paymentStatus);
+    if (nextPaymentStatus !== order.paymentStatus) {
+      await tx
+        .update(orders)
+        .set({ paymentStatus: nextPaymentStatus })
+        .where(eq(orders.id, order.id));
+    }
+
+    return {
+      status: "applied" as const,
+      order: { ...order, paymentStatus: nextPaymentStatus },
+    };
+  });
+}
+
+export async function getSalesAnalytics(ownerId: number, requestedDays: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  const restaurant = await getRestaurantByOwner(ownerId);
+  if (!restaurant) return null;
+
+  const days = Math.min(Math.max(Math.trunc(requestedDays), 1), 90);
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  const ordersInRange = await db
+    .select()
+    .from(orders)
+    .where(
+      and(
+        eq(orders.restaurantId, restaurant.id),
+        gte(orders.createdAt, start),
+        ne(orders.status, "cancelled"),
+      ),
+    )
+    .orderBy(asc(orders.createdAt));
+
+  const orderIds = ordersInRange.map(order => order.id);
+  const items = orderIds.length
+    ? await db.select().from(orderItems).where(inArray(orderItems.orderId, orderIds))
+    : [];
+
+  const daily = new Map<string, { date: string; revenueCents: number; orders: number }>();
+  for (let offset = 0; offset < days; offset += 1) {
+    const date = new Date(start);
+    date.setUTCDate(start.getUTCDate() + offset);
+    const key = date.toISOString().slice(0, 10);
+    daily.set(key, { date: key, revenueCents: 0, orders: 0 });
+  }
+  for (const order of ordersInRange) {
+    const key = new Date(order.createdAt).toISOString().slice(0, 10);
+    const entry = daily.get(key);
+    if (entry) {
+      entry.revenueCents += order.totalCents;
+      entry.orders += 1;
+    }
+  }
+
+  const topDishMap = new Map<string, { dishName: string; quantity: number; revenueCents: number }>();
+  for (const item of items) {
+    const entry = topDishMap.get(item.dishName) ?? {
+      dishName: item.dishName,
+      quantity: 0,
+      revenueCents: 0,
+    };
+    entry.quantity += item.quantity;
+    entry.revenueCents += item.unitPriceCents * item.quantity;
+    topDishMap.set(item.dishName, entry);
+  }
+
+  const paymentMap = new Map<string, { method: string; orders: number; revenueCents: number }>();
+  for (const order of ordersInRange) {
+    const method = order.paymentMethod === "wechat" ? "微信支付" : "到店支付";
+    const entry = paymentMap.get(method) ?? { method, orders: 0, revenueCents: 0 };
+    entry.orders += 1;
+    entry.revenueCents += order.totalCents;
+    paymentMap.set(method, entry);
+  }
+
+  const totalRevenueCents = ordersInRange.reduce((sum, order) => sum + order.totalCents, 0);
+  return {
+    days,
+    generatedAt: new Date(),
+    totalOrders: ordersInRange.length,
+    totalRevenueCents,
+    paidRevenueCents: ordersInRange
+      .filter(order => order.paymentStatus === "paid")
+      .reduce((sum, order) => sum + order.totalCents, 0),
+    averageOrderCents: ordersInRange.length ? Math.round(totalRevenueCents / ordersInRange.length) : 0,
+    daily: Array.from(daily.values()),
+    topDishes: Array.from(topDishMap.values())
+      .sort((a, b) => b.revenueCents - a.revenueCents)
+      .slice(0, 8),
+    paymentMethods: Array.from(paymentMap.values()).sort((a, b) => b.revenueCents - a.revenueCents),
+  };
 }
 
 export async function updateOrderStatusByOwner(ownerId: number, orderId: number, status: Order["status"]) {

@@ -4,6 +4,7 @@ import {
   mysqlTable,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
 
@@ -108,6 +109,28 @@ export const orderItems = mysqlTable("orderItems", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+/** Immutable provider callback ledger used for payment idempotency and auditability. */
+export const paymentTransactions = mysqlTable(
+  "paymentTransactions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    provider: mysqlEnum("provider", ["wechat", "mock"]).notNull(),
+    orderId: int("orderId").notNull(),
+    orderNumber: varchar("orderNumber", { length: 32 }).notNull(),
+    transactionId: varchar("transactionId", { length: 128 }).notNull(),
+    amountCents: int("amountCents").notNull(),
+    status: mysqlEnum("status", ["success", "failed", "refunded"]).notNull(),
+    rawPayload: text("rawPayload"),
+    processedAt: timestamp("processedAt").defaultNow().notNull(),
+  },
+  table => ({
+    providerTransactionUnique: uniqueIndex("payment_provider_transaction_unique").on(
+      table.provider,
+      table.transactionId,
+    ),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Restaurant = typeof restaurants.$inferSelect;
@@ -116,3 +139,4 @@ export type Dish = typeof dishes.$inferSelect;
 export type DiningTable = typeof diningTables.$inferSelect;
 export type Order = typeof orders.$inferSelect;
 export type OrderItem = typeof orderItems.$inferSelect;
+export type PaymentTransaction = typeof paymentTransactions.$inferSelect;

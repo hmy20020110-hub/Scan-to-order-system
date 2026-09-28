@@ -15,11 +15,13 @@ import {
   restaurants,
 } from "../drizzle/schema";
 import {
+  applyPaymentCallback,
   findOrderByNumber,
   getDb,
   getUserByOpenId,
   getPublicMenuByTable,
   getRestaurantByOwner,
+  getSalesAnalytics,
   getRestaurantState,
   insertOrderWithItems,
   updateMerchantLoginState,
@@ -28,6 +30,10 @@ import {
 } from "./db";
 import { TRPCError } from "@trpc/server";
 import { calculateOrderTotal, normalizeOrderItems } from "./order-utils";
+import {
+  paymentCallbackInputSchema,
+  validatePaymentCallback,
+} from "./payment-callbacks";
 import { storagePut } from "./storage";
 
 const restaurantInput = z.object({
@@ -150,12 +156,50 @@ export const appRouter = router({
           const order = await findOrderByNumber(input.orderNumber);
           if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "订单不存在" });
           return order;
-        }),
+      }),
     }),
+  }),
+
+  payment: router({
+    /** Public callback contract used by the mock provider and the WeChat adapter. */
+    callback: publicProcedure
+      .input(paymentCallbackInputSchema)
+      .mutation(async ({ input }) => {
+        const secret =
+          input.provider === "wechat"
+            ? ENV.wechatPaymentCallbackSecret
+            : ENV.mockPaymentCallbackSecret;
+        if (!secret || (ENV.isProduction && input.provider === "mock" && secret === "local-mock-payment-secret")) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "支付回调密钥尚未配置" });
+        }
+        let payload;
+        try {
+          payload = validatePaymentCallback({
+            provider: input.provider,
+            payload: input.payload,
+            signature: input.signature,
+            secret,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "PAYMENT_CALLBACK_INVALID";
+          const code = message === "PAYMENT_CALLBACK_EXPIRED" ? "BAD_REQUEST" : "UNAUTHORIZED";
+          throw new TRPCError({ code, message: "支付回调签名或时效校验失败" });
+        }
+        try {
+          return await applyPaymentCallback({ provider: input.provider, payload });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "PAYMENT_CALLBACK_FAILED";
+          const code = message === "PAYMENT_ORDER_NOT_FOUND" ? "NOT_FOUND" : "BAD_REQUEST";
+          throw new TRPCError({ code, message: "支付回调未能更新订单" });
+        }
+      }),
   }),
 
   admin: router({
     state: adminOnly.query(async ({ ctx }) => getRestaurantState(ctx.user.id)),
+    salesAnalytics: adminOnly
+      .input(z.object({ days: z.number().int().min(1).max(90).default(30) }))
+      .query(({ ctx, input }) => getSalesAnalytics(ctx.user.id, input.days)),
     createRestaurant: adminOnly.input(restaurantInput).mutation(async ({ ctx, input }) => {
       const db = requireDatabase(await getDb());
       const existing = await getRestaurantByOwner(ctx.user.id);

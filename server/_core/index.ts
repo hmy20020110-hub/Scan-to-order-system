@@ -3,6 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { TRPCError } from "@trpc/server";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
@@ -36,6 +37,29 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+  app.post("/api/payment-callbacks/:provider", async (req, res) => {
+    const provider = req.params.provider;
+    if (provider !== "wechat" && provider !== "mock") {
+      res.status(404).json({ success: false, message: "支付渠道不存在" });
+      return;
+    }
+    try {
+      const result = await appRouter.createCaller({
+        user: null,
+        req,
+        res,
+      }).payment.callback({
+        provider,
+        signature: req.header("x-payment-signature") ?? "",
+        payload: req.body,
+      });
+      res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      const code = error instanceof TRPCError ? error.code : "INTERNAL_SERVER_ERROR";
+      const status = code === "UNAUTHORIZED" ? 401 : code === "NOT_FOUND" ? 404 : code === "BAD_REQUEST" ? 400 : code === "PRECONDITION_FAILED" ? 412 : 500;
+      res.status(status).json({ success: false, message: error instanceof Error ? error.message : "支付回调处理失败" });
+    }
+  });
   // tRPC API
   app.use(
     "/api/trpc",
